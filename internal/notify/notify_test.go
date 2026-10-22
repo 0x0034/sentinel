@@ -133,3 +133,28 @@ func TestSharedTargetThrottleAndRedirect(t *testing.T) {
 		t.Fatal("webhook payload reached redirected destination")
 	}
 }
+
+func TestVulnerabilityCardsUseDiscoveryDateAndPreserveZeroScore(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 10, 21, 0, 1, 0, 0, loc)
+	zero := 0.0
+	n := model.Notice{Title: "CVE test", FirstSeen: now, Vulnerability: &model.Vulnerability{AVDID: "AVD-2026-10001", CVEID: "CVE-2020-10001", CVSS: &zero, DisclosureDate: "2020-01-01"}}
+	card, err := Incremental("阿里云 CVE", n, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"新发现漏洞", "首次发现：2026-10-21", "披露日期：2020-01-01", "CVSS：0.0", `"template":"red"`} {
+		if !strings.Contains(string(card), want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	n.Vulnerability.CVSS = nil
+	cards, err := VulnerabilityDigest("CVE", "2026-10-21", []model.Notice{n}, loc, false)
+	if err != nil || !strings.Contains(string(cards[0]), "CVSS：未知") || !strings.Contains(string(cards[0]), "昨日新发现") {
+		t.Fatal("unknown score or discovery digest missing")
+	}
+	empty, err := VulnerabilityDigest("CVE", "2026-10-21", nil, loc, true)
+	if err != nil || !strings.Contains(string(empty[0]), "抓取失败") || !strings.Contains(string(empty[0]), "未发现昨日新增漏洞记录") {
+		t.Fatal("empty vulnerability digest must explain coverage")
+	}
+}

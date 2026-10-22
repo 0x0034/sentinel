@@ -1,6 +1,6 @@
 services:
   sentinel:
-    image: registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.1.0
+    image: registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.1
     platform: linux/amd64
     restart: unless-stopped
     environment:
@@ -9,6 +9,9 @@ services:
       - ./config.yaml:/etc/sentinel/config.yaml:ro
       - sentinel-data:/data
     read_only: true
+    init: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:

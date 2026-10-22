@@ -2,10 +2,20 @@ database: /data/sentinel.db
 poll_interval: 5m
 digest_time: "09:00"
 timezone: Asia/Shanghai
+browser:
+  page_timeout: 45s
+  no_sandbox: true # Container isolation; set false where Chromium sandbox is available.
 subscriptions:
   - id: aliyun-security
     name: 阿里云安全公告
     url: https://rsshub.app/aliyun/notice/2
+    webhook_env: FEISHU_WEBHOOK_URL
+    incremental: true
+    digest: true
+  - id: aliyun-cve
+    name: 阿里云 CVE 漏洞库
+    type: aliyun_cve
+    pages: 5
     webhook_env: FEISHU_WEBHOOK_URL
     incremental: true
     digest: true

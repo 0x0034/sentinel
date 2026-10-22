@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,6 +33,22 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 			published = n.PublishedAt.In(loc).Format("2006-01-02 15:04 MST")
 		}
 		text := clip(n.Title, 200) + "\n" + published
+		if v := n.Vulnerability; v != nil {
+			score, disclosed, cve := "未知", "未提供", v.CVEID
+			if v.CVSS != nil {
+				score = strconv.FormatFloat(*v.CVSS, 'f', 1, 64)
+			}
+			if v.DisclosureDate != "" {
+				disclosed = v.DisclosureDate
+			}
+			if cve == "" {
+				cve = "未提供"
+			}
+			text = clip(n.Title, 200) + "\nCVE：" + clip(cve, 100) + "\nAVD：" + clip(v.AVDID, 120) + "\n漏洞类型：" + clip(v.Type, 120) + "\nCVSS：" + score + "\n披露日期：" + disclosed
+			if !n.FirstSeen.IsZero() {
+				text += "\n首次发现：" + n.FirstSeen.In(loc).Format("2006-01-02 15:04 MST")
+			}
+		}
 		if n.Summary != "" {
 			text += "\n" + clip(n.Summary, 600)
 		}
@@ -44,7 +61,11 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 }
 
 func Incremental(name string, notice model.Notice, loc *time.Location) ([]byte, error) {
-	body, err := card(clip(name, 80)+" · 新公告", "订阅源发现新公告", []model.Notice{notice}, loc)
+	title, intro := " · 新公告", "订阅源发现新公告"
+	if notice.Vulnerability != nil {
+		title, intro = " · 新发现漏洞", "CVE 漏洞库中新发现的条目，不代表今天首次披露。"
+	}
+	body, err := card(clip(name, 80)+title, intro, []model.Notice{notice}, loc)
 	if err == nil && len(body) > MaxPayloadBytes {
 		return nil, errors.New("incremental card exceeds size limit")
 	}
@@ -52,18 +73,29 @@ func Incremental(name string, notice model.Notice, loc *time.Location) ([]byte, 
 }
 
 func Digest(name, date string, notices []model.Notice, loc *time.Location, degraded bool) ([][]byte, error) {
+	return digest(name, date, notices, loc, degraded, false)
+}
+func VulnerabilityDigest(name, date string, notices []model.Notice, loc *time.Location, degraded bool) ([][]byte, error) {
+	return digest(name, date, notices, loc, degraded, true)
+}
+func digest(name, date string, notices []model.Notice, loc *time.Location, degraded, vulnerabilities bool) ([][]byte, error) {
 	zone := loc.String()
 	if zone == "Asia/Shanghai" {
 		zone = "北京时间"
 	}
 	intro := "汇总范围：" + date + "（" + zone + "）。仅包含已采集记录，来源窗口之外的公告可能未被采集。"
+	empty, label := " 未采集到昨日公告。", " · 昨日汇总 · "
+	if vulnerabilities {
+		intro = "首次发现范围：" + date + "（" + zone + "）。排除初始化基线；只覆盖已扫描页面，未覆盖的漏洞可能未被发现。"
+		empty, label = " 未发现昨日新增漏洞记录。", " · 昨日新发现 · "
+	}
 	if degraded {
 		intro += " 本次订阅源抓取失败，内容可能不完整。"
 	}
 	if len(notices) == 0 {
-		intro += " 未采集到昨日公告。"
+		intro += empty
 	}
-	title := clip(name, 80) + " · 昨日汇总 · " + date
+	title := clip(name, 80) + label + date
 	groups := [][]model.Notice{{}}
 	for _, n := range notices {
 		index := len(groups) - 1
