@@ -6,7 +6,7 @@
 
 ## 使用 Docker
 
-候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.2`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
+候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.3`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
 
 1. 复制示例，保留需要的订阅并编辑 RSS 地址（仅使用漏洞库时可删除 RSS 条目）：
 
@@ -75,9 +75,15 @@
 
 默认完整扫描前 5 页，当前每页 30 条，约覆盖 150 条。任一页面失败、挑战页、页码错位、整页重复或同一 AVD 内容冲突都会使本轮采集失败，下一轮重新扫描；只有完整成功才保存条目及发送任务。高风险列表实测存在相邻页的相同条目重复，按 AVD 去重后保存一次；原 CVE 列表继续严格拒绝跨页重叠。不会在遇到已见条目或旧披露日期时提前停止，也不保证全库覆盖、旧条目持续更新或任意停机时长后的补齐。修改页数会改变监测窗口，新进入窗口的旧条目也会被视为首次发现。
 
-默认监测阿里云高风险列表 `https://avd.aliyun.com/high-risk/list`，按站点收录范围抓取，不再按本地 CVSS 阈值过滤。卡片包含 AVD 标识、标题、类型、披露日期、漏洞状态（如 PoC、EXP、武器化）和原文链接，不批量抓取详情。该列表没有 CVSS 列，因此评分显示“未知”；只提取标题中明确出现的 CVE 编号，缺失时显示“未提供”，不根据 AVD 编号推导。
+默认监测阿里云高风险列表 `https://avd.aliyun.com/high-risk/list`，按站点收录范围抓取，不再按本地 CVSS 阈值过滤。卡片包含 AVD 标识、标题、类型、披露日期、漏洞状态（如 PoC、EXP、武器化）和原文链接，并按需补抓详情中的漏洞描述、解决建议、受影响软件情况和阿里云评分。阿里云评分与 CVSS 分开显示；该列表没有 CVSS 列，因此 CVSS 显示“未知”；只提取标题中明确出现的 CVE 编号，缺失时显示“未提供”，不根据 AVD 编号推导。
 
 原 `aliyun_cve` 类型仍可采集 `/nvd/list`，保留其 CVSS 0 分和未知评分语义。两种漏洞来源均按首次发现时间生成昨日汇总，并排除基线；RSS 与各漏洞来源独立通知，不跨来源合并相同条目。站点独立的 `/nonvd/list` 未接入，但高风险列表内没有 CVE 编号的条目也会被采集。
+
+详情中的受影响软件优先取专用表格，保留厂商、产品、版本及包含/不包含边界；没有表格时仅摘录描述中明确标注的影响版本。防护产品覆盖信息不会作为受影响软件。来源缺失字段显示“来源未提供”，阿里云评分不转换为 CVSS。
+
+首次静默基线不批量抓取详情。基线之后的新条目在生成通知前尝试补齐详情，成功结果存入 SQLite 并复用；旧版尚无详情的非基线记录在再次进入扫描窗口时也会补抓。每个订阅每轮最多 20 次详情请求、总时限 90 秒，未尝试过的条目优先，之后按最早尝试时间重试。详情失败或超出本轮限额时仍发送基础通知，四项详情字段明确显示“暂未获取”，后续轮询继续补齐。已生成的通知内容保持固定，补齐详情不另发增量提醒；后续昨日汇总使用已保存的详情。成功详情为采集时快照，不自动周期刷新。
+
+卡片保留段落、版本范围和建议中的链接；超长字段显示截断提示及原文按钮，按实际 JSON 字节控制单张 18 KiB 上限并拆分汇总。
 
 浏览器使用独立临时配置和最小环境，不继承机器人凭证。普通 HTTP 目前可能收到 WAF 挑战，因此使用 Chromium 渲染后校验业务表格；生产可达性取决于网络和站点策略，浏览器退出成功并不等于有效采集。
 
@@ -101,7 +107,7 @@ bin/sentinel version
 make image
 ```
 
-Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.2`），候选版本不更新 `latest`。
+Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.3`），候选版本不更新 `latest`。
 
 运行基础镜像使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22` 并固定 digest。APK 软件源使用 `https://mirrors.aliyun.com/alpine/`，安装 Chromium 和 TLS 证书前完成替换。`APK_DOWNLOAD_BASE` 构建参数默认也是该源，可在构建机器上指向同源缓存转发以改善下载速度；不改变最终镜像的 APK 源或运行环境。Alpine 包签名验证始终启用。
 
@@ -109,4 +115,4 @@ Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzh
 
 测试使用临时 SQLite、RSS/HTML 样例、本地 HTTP 服务和模拟浏览器，不调用真实机器人。覆盖跨时区日期边界、基线与增量、修改去重、故障和重启恢复、分片、业务响应、共享目标节流、数据库迁移、完整分页及浏览器生命周期。
 
-设计见 [RSS 方案](docs/design/rss-feishu.md)、[漏洞库方案](docs/design/aliyun-vulnerability-source.md)、[领域词汇](GLOSSARY.md) 和 [投递决策](docs/adr/0001-durable-notification-delivery.md)。验证见 [高风险来源验收记录](docs/verification/2026-10-22-high-risk.md)，此前 CVE 验收见 [rc.1 验收记录](docs/verification/2026-10-22-cve.md)，历史版本见 [0.1.0 验收记录](docs/verification/2026-10-22.md)。
+设计见 [RSS 方案](docs/design/rss-feishu.md)、[漏洞库方案](docs/design/aliyun-vulnerability-source.md)、[领域词汇](GLOSSARY.md) 和 [投递决策](docs/adr/0001-durable-notification-delivery.md)。详情补充验收见 [rc.3 记录](docs/verification/2026-10-22-details.md)，高风险来源验收见 [高风险来源验收记录](docs/verification/2026-10-22-high-risk.md)，此前 CVE 验收见 [rc.1 验收记录](docs/verification/2026-10-22-cve.md)，历史版本见 [0.1.0 验收记录](docs/verification/2026-10-22.md)。

@@ -1,6 +1,6 @@
 services:
   sentinel:
-    image: registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.2
+    image: registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.3
     platform: linux/amd64
     restart: unless-stopped
     environment:

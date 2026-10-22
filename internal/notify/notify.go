@@ -26,6 +26,15 @@ func clip(s string, n int) string {
 }
 
 func card(title, intro string, notices []model.Notice, loc *time.Location) ([]byte, error) {
+	for limit := 1000; ; limit /= 2 {
+		body, err := renderCard(title, intro, notices, loc, limit)
+		if err != nil || len(notices) != 1 || len(body) <= MaxPayloadBytes-128 || limit <= 125 {
+			return body, err
+		}
+	}
+}
+
+func renderCard(title, intro string, notices []model.Notice, loc *time.Location, detailLimit int) ([]byte, error) {
 	elements := []any{map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": intro}}}
 	for _, n := range notices {
 		published := "发布时间未提供"
@@ -51,6 +60,15 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 			if !n.FirstSeen.IsZero() {
 				text += "\n首次发现：" + n.FirstSeen.In(loc).Format("2006-01-02 15:04 MST")
 			}
+			description, solution, affected, aliyunScore := "详情暂未获取，请查看原文", "详情暂未获取，请查看原文", "详情暂未获取，请查看原文", "暂未获取"
+			if d := v.Details; d != nil {
+				description, solution, affected = detailValue(d.Description, detailLimit), detailValue(d.Solution, detailLimit), detailValue(d.AffectedSoftware, detailLimit)
+				aliyunScore = "来源未提供"
+				if d.AliyunScore != nil {
+					aliyunScore = strconv.FormatFloat(*d.AliyunScore, 'f', 1, 64) + " / 10"
+				}
+			}
+			text += "\n阿里云评分：" + aliyunScore + "\n\n漏洞描述：\n" + description + "\n\n解决建议：\n" + solution + "\n\n受影响软件情况：\n" + affected
 		}
 		if n.Summary != "" {
 			text += "\n" + clip(n.Summary, 600)
@@ -61,6 +79,16 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 		}
 	}
 	return json.Marshal(map[string]any{"msg_type": "interactive", "card": map[string]any{"config": map[string]bool{"wide_screen_mode": true}, "header": map[string]any{"template": "red", "title": map[string]string{"tag": "plain_text", "content": title}}, "elements": elements}})
+}
+
+func detailValue(value string, limit int) string {
+	if value == "" {
+		return "来源未提供"
+	}
+	if len([]rune(value)) > limit {
+		return clip(value, limit) + "（完整内容见原文）"
+	}
+	return value
 }
 
 func Incremental(name string, notice model.Notice, loc *time.Location) ([]byte, error) {

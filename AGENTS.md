@@ -18,6 +18,7 @@ Use a single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agent
 - Entrypoint: `cmd/sentinel`. Application packages live under `internal/`; implementation and behavior are described in `docs/design/rss-feishu.md`.
 - Aliyun vulnerability source behavior is in `docs/design/aliyun-vulnerability-source.md`. The default subscription monitors `/high-risk/list`; `aliyun_cve` preserves `/nvd/list` compatibility. Chromium renders list pages; AVD IDs define identity. Both high-risk and CVE digests use first discovery time and exclude initialization baselines; RSS digests keep publication-time semantics.
 - Database schema changes require migration coverage preserving old RSS state and pending payloads. Changing a subscription source type requires a new subscription ID.
+- Detail enrichment uses the verified detail headings and identity. Keep Aliyun scores separate from CVSS, and affected software separate from protection products. Persist details in existing vulnerability JSON; first-run baselines do not fetch details. See `docs/adr/0005-vulnerability-details.md`.
 - Browser subprocesses must use isolated temporary profiles and a minimal environment without webhook credentials. Validate business DOM and pagination, not only process exit or HTTP status.
 - Run `make check test build` after behavior changes. Tests use local HTTP servers and temporary SQLite databases; they do not send real robot messages.
 - SQLite is the durable store. Run one service instance per database; container data lives in `/data` and must be persisted.

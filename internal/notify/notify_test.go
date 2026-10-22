@@ -159,3 +159,32 @@ func TestVulnerabilityCardsUseDiscoveryDateAndPreserveZeroScore(t *testing.T) {
 		t.Fatal("empty vulnerability digest must explain coverage")
 	}
 }
+
+func TestDetailedCardsKeepFieldsAndRespectByteLimit(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	score := 0.0
+	n := model.Notice{Title: "Detailed test", Link: "https://avd.aliyun.com/detail?id=AVD-2026-10001", Vulnerability: &model.Vulnerability{AVDID: "AVD-2026-10001", Details: &model.VulnerabilityDetails{Description: strings.Repeat("描<&述", 2000), Solution: strings.Repeat("修>&复", 2000), AffectedSoftware: strings.Repeat("软件<&版本", 2000), AliyunScore: &score}}}
+	body, err := Incremental("高风险", n, loc)
+	if err != nil || len(body) > MaxPayloadBytes {
+		t.Fatalf("large detail card failed: %d %v", len(body), err)
+	}
+	for _, want := range []string{"漏洞描述", "解决建议", "受影响软件情况", "阿里云评分：0.0 / 10", "CVSS：未知", "完整内容见原文", `"template":"red"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	cards, err := VulnerabilityDigest("高风险", "2026-10-21", []model.Notice{n, n, n, n, n}, loc, false)
+	if err != nil || len(cards) < 2 {
+		t.Fatalf("detailed digest was not split: %d %v", len(cards), err)
+	}
+	for _, body := range cards {
+		if len(body) > MaxPayloadBytes || !strings.Contains(string(body), "解决建议") {
+			t.Fatal("detail lost or card too large")
+		}
+	}
+	n.Vulnerability.Details = &model.VulnerabilityDetails{}
+	body, err = Incremental("高风险", n, loc)
+	if err != nil || !strings.Contains(string(body), "来源未提供") {
+		t.Fatal("missing fields invented")
+	}
+}

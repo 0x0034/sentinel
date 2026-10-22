@@ -66,6 +66,9 @@ func (a *App) Poll(ctx context.Context, now time.Time) error {
 			failures = append(failures, fmt.Errorf("subscription %s fetch failed", sub.ID))
 			continue
 		}
+		if err := a.enrich(ctx, sub, result.Notices); err != nil {
+			return err
+		}
 		completed := now.Add(time.Since(started))
 		if a.Now != nil {
 			completed = a.Now()

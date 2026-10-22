@@ -13,12 +13,21 @@ type Notice struct {
 }
 
 type Vulnerability struct {
-	AVDID          string   `json:"avd_id"`
-	CVEID          string   `json:"cve_id"`
-	Type           string   `json:"type"`
-	Status         string   `json:"status,omitempty"`
-	DisclosureDate string   `json:"disclosure_date"`
-	CVSS           *float64 `json:"cvss"`
+	AVDID          string                `json:"avd_id"`
+	CVEID          string                `json:"cve_id"`
+	Type           string                `json:"type"`
+	Status         string                `json:"status,omitempty"`
+	DisclosureDate string                `json:"disclosure_date"`
+	CVSS           *float64              `json:"cvss"`
+	Details        *VulnerabilityDetails `json:"details,omitempty"`
+	DetailAttempt  time.Time             `json:"detail_attempt,omitempty"`
+}
+
+type VulnerabilityDetails struct {
+	Description      string   `json:"description"`
+	Solution         string   `json:"solution"`
+	AffectedSoftware string   `json:"affected_software"`
+	AliyunScore      *float64 `json:"aliyun_score"`
 }
 
 type FetchResult struct {
