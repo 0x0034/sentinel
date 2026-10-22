@@ -16,6 +16,7 @@ type Vulnerability struct {
 	AVDID          string   `json:"avd_id"`
 	CVEID          string   `json:"cve_id"`
 	Type           string   `json:"type"`
+	Status         string   `json:"status,omitempty"`
 	DisclosureDate string   `json:"disclosure_date"`
 	CVSS           *float64 `json:"cvss"`
 }

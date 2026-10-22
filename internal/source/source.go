@@ -27,35 +27,53 @@ func (c *Client) Fetch(ctx context.Context, sub config.Subscription) (model.Fetc
 	if sub.Type == "" || sub.Type == config.RSS {
 		return c.RSS.Fetch(ctx, sub.URL)
 	}
-	if sub.Type != config.AliyunCVE {
+	if !config.IsVulnerabilitySource(sub.Type) {
 		return model.FetchResult{}, errors.New("unsupported source type")
+	}
+	listURL, parse := config.AliyunCVEURL, ParseCVEPage
+	if sub.Type == config.AliyunHighRisk {
+		listURL, parse = config.AliyunHighRiskURL, ParseHighRiskPage
+	}
+	if sub.URL != "" && sub.URL != listURL {
+		return model.FetchResult{}, errors.New("Aliyun source URL must match its list type")
 	}
 	pages := sub.Pages
 	if pages == 0 {
 		pages = 5
 	}
 	if pages < 1 || pages > 20 {
-		return model.FetchResult{}, errors.New("invalid CVE page limit")
+		return model.FetchResult{}, errors.New("invalid Aliyun page limit")
 	}
 	var result model.FetchResult
-	seen := map[string]bool{}
+	seen := map[string]model.Notice{}
 	for number := 1; number <= pages; number++ {
-		body, err := c.Browser.Render(ctx, fmt.Sprintf("%s?page=%d", config.AliyunCVEURL, number))
+		body, err := c.Browser.Render(ctx, fmt.Sprintf("%s?page=%d", listURL, number))
 		if err != nil {
-			return model.FetchResult{}, fmt.Errorf("CVE page %d: %w", number, err)
+			return model.FetchResult{}, fmt.Errorf("Aliyun page %d: %w", number, err)
 		}
-		page, err := ParseCVEPage(body, number)
+		page, err := parse(body, number)
 		if err != nil {
-			return model.FetchResult{}, fmt.Errorf("CVE page %d: %w", number, err)
+			return model.FetchResult{}, fmt.Errorf("Aliyun page %d: %w", number, err)
 		}
+		added := 0
 		for _, n := range page.Notices {
-			if seen[n.ID] {
-				return model.FetchResult{}, errors.New("CVE pages overlap; retry a complete scan")
+			if previous, exists := seen[n.ID]; exists {
+				if sub.Type != config.AliyunHighRisk || n.Title != previous.Title || n.Link != previous.Link || *n.Vulnerability != *previous.Vulnerability {
+					return model.FetchResult{}, errors.New("Aliyun pages overlap or conflict; retry a complete scan")
+				}
+				result.Skipped++
+				continue
 			}
-			seen[n.ID] = true
+			seen[n.ID] = n
+			added++
 			result.Notices = append(result.Notices, n)
+			if n.Vulnerability.DisclosureDate == "" {
+				result.Undated++
+			}
 		}
-		result.Undated += page.Undated
+		if len(page.Notices) > 0 && added == 0 {
+			return model.FetchResult{}, errors.New("Aliyun page repeats previously scanned records")
+		}
 		if number >= page.TotalPages {
 			break
 		}

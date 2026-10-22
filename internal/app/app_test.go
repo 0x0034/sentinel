@@ -231,80 +231,89 @@ type renderFunc func(context.Context, string) ([]byte, error)
 
 func (f renderFunc) Render(ctx context.Context, url string) ([]byte, error) { return f(ctx, url) }
 
-func TestCVEWindowBaselineAndDiscoveryDigest(t *testing.T) {
-	fixture, err := os.ReadFile("../../testdata/aliyun-page.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := string(fixture)
-	second := strings.NewReplacer("第 1 页", "第 2 页", "10001", "20001", "10002", "20002").Replace(first)
-	failSecond := true
-	client := source.NewClient(config.Browser{})
-	client.Browser = renderFunc(func(ctx context.Context, url string) ([]byte, error) {
-		if strings.HasSuffix(url, "?page=2") {
-			if failSecond {
-				return nil, errors.New("page failed")
+func TestVulnerabilityWindowBaselineAndDiscoveryDigest(t *testing.T) {
+	for _, kind := range []string{config.AliyunCVE, config.AliyunHighRisk} {
+		t.Run(kind, func(t *testing.T) {
+			fixtureName := "../../testdata/aliyun-page.html"
+			if kind == config.AliyunHighRisk {
+				fixtureName = "../../testdata/aliyun-high-risk-page.html"
 			}
-			return []byte(second), nil
-		}
-		return []byte(first), nil
-	})
-	c := testConfig()
-	c.Subscriptions[0].Type = config.AliyunCVE
-	c.Subscriptions[0].Pages = 2
-	c.Subscriptions[0].Name = "CVE source"
-	db, err := store.Open(filepath.Join(t.TempDir(), "cve.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	sender := &captureSender{}
-	a := New(c, db, client, sender, quiet())
-	ctx := context.Background()
-	baseline := time.Date(2026, 10, 20, 8, 0, 0, 0, c.Location)
-	a.Now = func() time.Time { return baseline }
-	if err := a.Once(ctx, baseline); err == nil {
-		t.Fatal("partial scan should fail")
-	}
-	failSecond = false
-	if err := a.Once(ctx, baseline); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.bodies) != 0 {
-		t.Fatal("failed scan established a partial baseline")
-	}
-	first = strings.NewReplacer("10001", "30001", "测试漏洞", "NEW-CVE").Replace(first)
-	discovered := time.Date(2026, 10, 21, 0, 0, 0, 0, c.Location)
-	a.Now = func() time.Time { return discovered }
-	if err := a.Poll(ctx, discovered.Add(-10*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Drain(ctx, discovered); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.bodies) != 1 || !strings.Contains(sender.bodies[0], "首次发现：2026-10-21") || !strings.Contains(sender.bodies[0], "新发现漏洞") {
-		t.Fatal("new vulnerability or completion timestamp missing")
-	}
-	first = strings.Replace(first, "NEW-CVE", "EDITED-CVE", 1)
-	a.Now = func() time.Time { return discovered.Add(time.Hour) }
-	if err := a.Poll(ctx, discovered.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Drain(ctx, discovered.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.bodies) != 1 {
-		t.Fatal("edit was resent")
-	}
-	due := discovered.AddDate(0, 0, 1).Add(9 * time.Hour)
-	if err := a.Digests(ctx, due); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Drain(ctx, due); err != nil {
-		t.Fatal(err)
-	}
-	if len(sender.bodies) != 2 || !strings.Contains(sender.bodies[1], "昨日新发现") || !strings.Contains(sender.bodies[1], "EDITED-CVE") || strings.Contains(sender.bodies[1], "AVD-2026-10002") {
-		t.Fatal("digest did not exclude baseline or retain new old-disclosure record")
+			fixture, err := os.ReadFile(fixtureName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := string(fixture)
+			second := strings.NewReplacer("第 1 页", "第 2 页", "10001", "20001", "10002", "20002").Replace(first)
+			failSecond := true
+			client := source.NewClient(config.Browser{})
+			client.Browser = renderFunc(func(ctx context.Context, url string) ([]byte, error) {
+				if strings.HasSuffix(url, "?page=2") {
+					if failSecond {
+						return nil, errors.New("page failed")
+					}
+					return []byte(second), nil
+				}
+				return []byte(first), nil
+			})
+			c := testConfig()
+			c.Subscriptions[0].Type = kind
+			c.Subscriptions[0].URL = ""
+			c.Subscriptions[0].Pages = 2
+			c.Subscriptions[0].Name = "CVE source"
+			db, err := store.Open(filepath.Join(t.TempDir(), "cve.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			sender := &captureSender{}
+			a := New(c, db, client, sender, quiet())
+			ctx := context.Background()
+			baseline := time.Date(2026, 10, 20, 8, 0, 0, 0, c.Location)
+			a.Now = func() time.Time { return baseline }
+			if err := a.Once(ctx, baseline); err == nil {
+				t.Fatal("partial scan should fail")
+			}
+			failSecond = false
+			if err := a.Once(ctx, baseline); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.bodies) != 0 {
+				t.Fatal("failed scan established a partial baseline")
+			}
+			first = strings.NewReplacer("10001", "30001", "测试漏洞", "NEW-CVE").Replace(first)
+			discovered := time.Date(2026, 10, 21, 0, 0, 0, 0, c.Location)
+			a.Now = func() time.Time { return discovered }
+			if err := a.Poll(ctx, discovered.Add(-10*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Drain(ctx, discovered); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.bodies) != 1 || !strings.Contains(sender.bodies[0], "首次发现：2026-10-21") || !strings.Contains(sender.bodies[0], "新发现漏洞") {
+				t.Fatal("new vulnerability or completion timestamp missing")
+			}
+			first = strings.Replace(first, "NEW-CVE", "EDITED-CVE", 1)
+			a.Now = func() time.Time { return discovered.Add(time.Hour) }
+			if err := a.Poll(ctx, discovered.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Drain(ctx, discovered.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.bodies) != 1 {
+				t.Fatal("edit was resent")
+			}
+			due := discovered.AddDate(0, 0, 1).Add(9 * time.Hour)
+			if err := a.Digests(ctx, due); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.Drain(ctx, due); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.bodies) != 2 || !strings.Contains(sender.bodies[1], "昨日新发现") || !strings.Contains(sender.bodies[1], "EDITED-CVE") || strings.Contains(sender.bodies[1], "AVD-2026-10002") {
+				t.Fatal("digest did not exclude baseline or retain new old-disclosure record")
+			}
+		})
 	}
 }
 
@@ -317,25 +326,29 @@ func (f *blockingFetcher) Fetch(ctx context.Context, sub config.Subscription) (m
 }
 
 func TestChangedSourceRejectedBeforeStartingWorkers(t *testing.T) {
-	c := testConfig()
-	c.Subscriptions = append(c.Subscriptions, config.Subscription{ID: "changed", Type: config.AliyunCVE, Incremental: true})
-	db, err := store.Open(filepath.Join(t.TempDir(), "old.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.EnsureSource(context.Background(), "changed", config.RSS); err != nil {
-		t.Fatal(err)
-	}
-	f := &blockingFetcher{}
-	sender := &captureSender{}
-	a := New(c, db, f, sender, quiet())
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	if err := a.Run(ctx); err == nil || !strings.Contains(err.Error(), "source type changed") {
-		t.Fatalf("configuration mismatch not rejected: %v", err)
-	}
-	if f.called || len(sender.bodies) > 0 {
-		t.Fatal("workers started before validating all source identities")
+	for _, pair := range [][2]string{{config.RSS, config.AliyunCVE}, {config.AliyunCVE, config.AliyunHighRisk}} {
+		t.Run(pair[0]+"-to-"+pair[1], func(t *testing.T) {
+			c := testConfig()
+			c.Subscriptions = append(c.Subscriptions, config.Subscription{ID: "changed", Type: pair[1], Incremental: true})
+			db, err := store.Open(filepath.Join(t.TempDir(), "old.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err := db.EnsureSource(context.Background(), "changed", pair[0]); err != nil {
+				t.Fatal(err)
+			}
+			f := &blockingFetcher{}
+			sender := &captureSender{}
+			a := New(c, db, f, sender, quiet())
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if err := a.Run(ctx); err == nil || !strings.Contains(err.Error(), "source type changed") {
+				t.Fatalf("configuration mismatch not rejected: %v", err)
+			}
+			if f.called || len(sender.bodies) > 0 {
+				t.Fatal("workers started before validating all source identities")
+			}
+		})
 	}
 }

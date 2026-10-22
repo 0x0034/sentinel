@@ -104,6 +104,7 @@ func TestDiscoveryWindowExcludesBaselineAndSurvivesReopen(t *testing.T) {
 	edited.Title = "edited"
 	score := 9.8
 	edited.Vulnerability.CVSS = &score
+	edited.Vulnerability.Status = "CVE 武器化"
 	if _, err := db.Ingest(ctx, "cve", []model.Notice{edited}, nil, end.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +112,7 @@ func TestDiscoveryWindowExcludesBaselineAndSurvivesReopen(t *testing.T) {
 	if err != nil || len(items) != 2 {
 		t.Fatalf("wrong discovered records: %+v %v", items, err)
 	}
-	if items[0].ID != "inclusive" || items[0].Title != "edited" || !items[0].FirstSeen.Equal(start) || items[0].Vulnerability.CVSS == nil || *items[0].Vulnerability.CVSS != 9.8 {
+	if items[0].ID != "inclusive" || items[0].Title != "edited" || !items[0].FirstSeen.Equal(start) || items[0].Vulnerability.CVSS == nil || *items[0].Vulnerability.CVSS != 9.8 || items[0].Vulnerability.Status != "CVE 武器化" {
 		t.Fatal("first seen or metadata not preserved")
 	}
 	if items[1].ID != "last-second" {

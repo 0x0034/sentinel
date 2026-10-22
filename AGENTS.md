@@ -16,7 +16,7 @@ Use a single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agent
 
 - Use Go **1.27.2**. `make` pins `GOTOOLCHAIN=go1.27.2`; do not silently upgrade it.
 - Entrypoint: `cmd/sentinel`. Application packages live under `internal/`; implementation and behavior are described in `docs/design/rss-feishu.md`.
-- CVE source behavior is in `docs/design/aliyun-vulnerability-source.md`. Chromium renders list pages; AVD IDs define identity. CVE digests use first discovery time and exclude initialization baselines; RSS digests keep publication-time semantics.
+- Aliyun vulnerability source behavior is in `docs/design/aliyun-vulnerability-source.md`. The default subscription monitors `/high-risk/list`; `aliyun_cve` preserves `/nvd/list` compatibility. Chromium renders list pages; AVD IDs define identity. Both high-risk and CVE digests use first discovery time and exclude initialization baselines; RSS digests keep publication-time semantics.
 - Database schema changes require migration coverage preserving old RSS state and pending payloads. Changing a subscription source type requires a new subscription ID.
 - Browser subprocesses must use isolated temporary profiles and a minimal environment without webhook credentials. Validate business DOM and pagination, not only process exit or HTTP status.
 - Run `make check test build` after behavior changes. Tests use local HTTP servers and temporary SQLite databases; they do not send real robot messages.

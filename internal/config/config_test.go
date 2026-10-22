@@ -60,7 +60,17 @@ func TestSourceConfigurationAndLegacyDefaults(t *testing.T) {
 	if err != nil || c.Subscriptions[0].URL != AliyunCVEURL || c.Subscriptions[0].Pages != 5 || c.Browser.PageTimeout != 45*time.Second {
 		t.Fatalf("CVE defaults: %+v %v", c, err)
 	}
+	highRisk := strings.Replace(cve, "aliyun_cve", "aliyun_high_risk", 1)
+	for _, body := range []string{highRisk, strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    url: https://avd.aliyun.com/high-risk/list", 1)} {
+		c, err := Decode(strings.NewReader(body), lookup)
+		if err != nil || c.Subscriptions[0].URL != "https://avd.aliyun.com/high-risk/list" || c.Subscriptions[0].Pages != 5 {
+			t.Fatalf("high-risk source: %+v %v", c, err)
+		}
+	}
 	for _, bad := range []string{
+		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    url: https://avd.aliyun.com/nvd/list", 1),
+		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    pages: 21", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    url: https://avd.aliyun.com/high-risk/list", 1),
 		strings.Replace(cve, "type: aliyun_cve", "type: unsupported", 1),
 		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    pages: -1", 1),
 		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    pages: 21", 1),

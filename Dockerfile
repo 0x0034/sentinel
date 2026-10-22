@@ -9,7 +9,7 @@ COPY cmd ./cmd
 COPY internal ./internal
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-ARG VERSION=0.2.0-rc.1
+ARG VERSION=0.2.0-rc.2
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/sentinel ./cmd/sentinel
 
 FROM registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22@sha256:dc92f017beea8e7f43263073d717f7bc011228c95d5312e440deb4d035bb4eec AS runtime

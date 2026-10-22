@@ -68,7 +68,7 @@ func run(log *slog.Logger) error {
 			notices := app.TestNotices(now, cfg.Location)
 			digest := notify.Digest
 			date := notices[0].PublishedAt.In(cfg.Location).Format("2006-01-02")
-			if sub.Type == config.AliyunCVE {
+			if config.IsVulnerabilitySource(sub.Type) {
 				notices = app.TestVulnerabilities(now, cfg.Location)
 				digest = notify.VulnerabilityDigest
 				date = notices[0].FirstSeen.In(cfg.Location).Format("2006-01-02")

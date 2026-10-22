@@ -12,9 +12,10 @@ subscriptions:
     webhook_env: FEISHU_WEBHOOK_URL
     incremental: true
     digest: true
-  - id: aliyun-cve
-    name: 阿里云 CVE 漏洞库
-    type: aliyun_cve
+  - id: aliyun-high-risk
+    name: 阿里云高风险漏洞库
+    type: aliyun_high_risk
+    url: https://avd.aliyun.com/high-risk/list
     pages: 5
     webhook_env: FEISHU_WEBHOOK_URL
     incremental: true

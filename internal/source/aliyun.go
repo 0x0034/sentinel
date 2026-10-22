@@ -14,7 +14,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-type CVEPage struct {
+type AliyunPage struct {
 	model.FetchResult
 	TotalPages int
 }
@@ -23,32 +23,44 @@ var pagination = regexp.MustCompile(`第\s*(\d+)\s*页\s*/\s*(\d+)\s*页\s*[•�
 var avdID = regexp.MustCompile(`^AVD-[A-Za-z0-9-]{1,100}$`)
 var cveID = regexp.MustCompile(`^CVE-\d{4}-\d{4,}$`)
 
-func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
-	var page CVEPage
+func ParseCVEPage(body []byte, expectedPage int) (AliyunPage, error) {
+	return parseAliyunPage(body, expectedPage, false)
+}
+
+func ParseHighRiskPage(body []byte, expectedPage int) (AliyunPage, error) {
+	return parseAliyunPage(body, expectedPage, true)
+}
+
+func parseAliyunPage(body []byte, expectedPage int, highRisk bool) (AliyunPage, error) {
+	var page AliyunPage
 	if len(body) > 8<<20 {
-		return page, errors.New("CVE page exceeds size limit")
+		return page, errors.New("Aliyun page exceeds size limit")
 	}
 	root, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
-		return page, errors.New("invalid CVE HTML")
+		return page, errors.New("invalid Aliyun HTML")
 	}
 	markers := pagination.FindAllStringSubmatch(nodeText(root), -1)
 	if len(markers) == 0 {
-		return page, errors.New("CVE pagination missing; possible challenge or layout change")
+		return page, errors.New("Aliyun pagination missing; possible challenge or layout change")
 	}
 	current, _ := strconv.Atoi(markers[0][1])
 	total, _ := strconv.Atoi(markers[0][2])
 	count, _ := strconv.ParseInt(markers[0][3], 10, 64)
 	if current != expectedPage || current < 1 || total < current || count < 0 || (count == 0 && (current != 1 || total != 1)) {
-		return page, errors.New("invalid or mismatched CVE pagination")
+		return page, errors.New("invalid or mismatched Aliyun pagination")
 	}
 	for _, m := range markers[1:] {
 		if strings.Join(m[1:], ":") != strings.Join(markers[0][1:], ":") {
-			return page, errors.New("inconsistent CVE pagination")
+			return page, errors.New("inconsistent Aliyun pagination")
 		}
 	}
 	page.TotalPages = total
-	headers := []string{"CVE编号", "漏洞名称", "漏洞类型", "披露时间", "CVSS评分"}
+	identity, extra := "CVE编号", "CVSS评分"
+	if highRisk {
+		identity, extra = "AVD编号", "漏洞状态"
+	}
+	headers := []string{identity, "漏洞名称", "漏洞类型", "披露时间", extra}
 	var table *html.Node
 	var columns map[string]int
 	for _, candidate := range descendants(root, "table") {
@@ -68,17 +80,17 @@ func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
 		}
 		if valid {
 			if table != nil {
-				return page, errors.New("ambiguous CVE table")
+				return page, errors.New("ambiguous Aliyun table")
 			}
 			table, columns = candidate, found
 		}
 	}
 	if table == nil {
-		return page, errors.New("CVE table missing; possible challenge or layout change")
+		return page, errors.New("Aliyun table missing; possible challenge or layout change")
 	}
 	bodies := descendants(table, "tbody")
 	if len(bodies) != 1 {
-		return page, errors.New("invalid CVE table body")
+		return page, errors.New("invalid Aliyun table body")
 	}
 	seen := map[string]bool{}
 	base, _ := url.Parse("https://avd.aliyun.com")
@@ -88,11 +100,11 @@ func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
 			continue
 		}
 		if len(cells) != 5 {
-			return page, errors.New("incomplete CVE row")
+			return page, errors.New("incomplete Aliyun row")
 		}
-		links := descendants(cells[columns["CVE编号"]], "a")
+		links := descendants(cells[columns[identity]], "a")
 		if len(links) != 1 {
-			return page, errors.New("CVE identity link missing")
+			return page, errors.New("Aliyun identity link missing")
 		}
 		raw := ""
 		for _, a := range links[0].Attr {
@@ -102,7 +114,7 @@ func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
 		}
 		u, err := url.Parse(raw)
 		if err != nil || raw == "" {
-			return page, errors.New("invalid CVE detail link")
+			return page, errors.New("invalid Aliyun detail link")
 		}
 		u = base.ResolveReference(u)
 		id := u.Query().Get("id")
@@ -113,13 +125,20 @@ func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
 			return page, errors.New("duplicate AVD identity")
 		}
 		seen[id] = true
-		cve := nodeText(links[0])
-		if !cveID.MatchString(cve) {
+		label := nodeText(links[0])
+		rawTitle := nodeText(cells[columns["漏洞名称"]])
+		cve := label
+		if highRisk {
+			if label != id {
+				return page, errors.New("AVD label and detail identity disagree")
+			}
+			cve = titleCVE(rawTitle)
+		} else if !cveID.MatchString(cve) {
 			cve = ""
 		}
-		title := boundedText(nodeText(cells[columns["漏洞名称"]]), 200)
+		title := boundedText(rawTitle, 200)
 		if title == "" {
-			return page, errors.New("CVE title missing")
+			return page, errors.New("Aliyun title missing")
 		}
 		v := &model.Vulnerability{AVDID: id, CVEID: cve, Type: boundedText(nodeText(cells[columns["漏洞类型"]]), 120)}
 		disclosed := nodeText(cells[columns["披露时间"]])
@@ -128,13 +147,15 @@ func ParseCVEPage(body []byte, expectedPage int) (CVEPage, error) {
 		} else {
 			page.Undated++
 		}
-		if score, err := strconv.ParseFloat(nodeText(cells[columns["CVSS评分"]]), 64); err == nil && !math.IsNaN(score) && !math.IsInf(score, 0) && score >= 0 && score <= 10 {
+		if highRisk {
+			v.Status = boundedText(nodeText(cells[columns[extra]]), 120)
+		} else if score, err := strconv.ParseFloat(nodeText(cells[columns[extra]]), 64); err == nil && !math.IsNaN(score) && !math.IsInf(score, 0) && score >= 0 && score <= 10 {
 			v.CVSS = &score
 		}
 		page.Notices = append(page.Notices, model.Notice{ID: id, Title: title, Link: "https://avd.aliyun.com/detail?id=" + url.QueryEscape(id), Vulnerability: v})
 	}
 	if (count > 0 && len(page.Notices) == 0) || (count == 0 && len(page.Notices) > 0) || int64(len(page.Notices)) > count {
-		return page, errors.New("CVE table and record count disagree")
+		return page, errors.New("Aliyun table and record count disagree")
 	}
 	return page, nil
 }
@@ -178,4 +199,18 @@ func boundedText(text string, limit int) string {
 		return string(runes[:limit]) + "…"
 	}
 	return text
+}
+
+var titleCVEPattern = regexp.MustCompile(`\bCVE-\d{4}-\d{4,}\b`)
+
+func titleCVE(title string) string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, id := range titleCVEPattern.FindAllString(title, -1) {
+		if !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return strings.Join(ids, ", ")
 }

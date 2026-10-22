@@ -149,8 +149,9 @@ func TestVulnerabilityCardsUseDiscoveryDateAndPreserveZeroScore(t *testing.T) {
 		}
 	}
 	n.Vulnerability.CVSS = nil
+	n.Vulnerability.Status = "CVE PoC"
 	cards, err := VulnerabilityDigest("CVE", "2026-10-21", []model.Notice{n}, loc, false)
-	if err != nil || !strings.Contains(string(cards[0]), "CVSS：未知") || !strings.Contains(string(cards[0]), "昨日新发现") {
+	if err != nil || !strings.Contains(string(cards[0]), "CVSS：未知") || !strings.Contains(string(cards[0]), "昨日新发现") || !strings.Contains(string(cards[0]), "漏洞状态：CVE PoC") {
 		t.Fatal("unknown score or discovery digest missing")
 	}
 	empty, err := VulnerabilityDigest("CVE", "2026-10-21", nil, loc, true)

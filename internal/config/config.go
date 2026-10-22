@@ -29,6 +29,12 @@ type Subscription struct {
 const RSS = "rss"
 const AliyunCVE = "aliyun_cve"
 const AliyunCVEURL = "https://avd.aliyun.com/nvd/list"
+const AliyunHighRisk = "aliyun_high_risk"
+const AliyunHighRiskURL = "https://avd.aliyun.com/high-risk/list"
+
+func IsVulnerabilitySource(kind string) bool {
+	return kind == AliyunCVE || kind == AliyunHighRisk
+}
 
 type Browser struct {
 	Executable  string        `yaml:"executable"`
@@ -103,20 +109,24 @@ func Decode(r io.Reader, getenv func(string) string) (Config, error) {
 		switch s.Type {
 		case RSS:
 			if s.Pages != 0 {
-				return c, errors.New("pages is only supported for aliyun_cve")
+				return c, errors.New("pages is only supported for Aliyun vulnerability sources")
 			}
-		case AliyunCVE:
+		case AliyunCVE, AliyunHighRisk:
+			listURL := AliyunCVEURL
+			if s.Type == AliyunHighRisk {
+				listURL = AliyunHighRiskURL
+			}
 			if s.URL == "" {
-				s.URL = AliyunCVEURL
+				s.URL = listURL
 			}
-			if s.URL != AliyunCVEURL {
-				return c, errors.New("aliyun_cve URL must be the public CVE list")
+			if s.URL != listURL {
+				return c, errors.New("Aliyun source URL must match its list type")
 			}
 			if s.Pages == 0 {
 				s.Pages = 5
 			}
 			if s.Pages < 1 || s.Pages > 20 {
-				return c, errors.New("aliyun_cve pages must be between 1 and 20")
+				return c, errors.New("Aliyun source pages must be between 1 and 20")
 			}
 		default:
 			return c, errors.New("unsupported subscription type")

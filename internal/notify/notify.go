@@ -45,6 +45,9 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 				cve = "未提供"
 			}
 			text = clip(n.Title, 200) + "\nCVE：" + clip(cve, 100) + "\nAVD：" + clip(v.AVDID, 120) + "\n漏洞类型：" + clip(v.Type, 120) + "\nCVSS：" + score + "\n披露日期：" + disclosed
+			if v.Status != "" {
+				text += "\n漏洞状态：" + clip(v.Status, 120)
+			}
 			if !n.FirstSeen.IsZero() {
 				text += "\n首次发现：" + n.FirstSeen.In(loc).Format("2006-01-02 15:04 MST")
 			}
@@ -63,7 +66,7 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 func Incremental(name string, notice model.Notice, loc *time.Location) ([]byte, error) {
 	title, intro := " · 新公告", "订阅源发现新公告"
 	if notice.Vulnerability != nil {
-		title, intro = " · 新发现漏洞", "CVE 漏洞库中新发现的条目，不代表今天首次披露。"
+		title, intro = " · 新发现漏洞", "漏洞库中新发现的条目，不代表今天首次披露。"
 	}
 	body, err := card(clip(name, 80)+title, intro, []model.Notice{notice}, loc)
 	if err == nil && len(body) > MaxPayloadBytes {

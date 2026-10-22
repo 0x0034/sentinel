@@ -81,37 +81,49 @@ type rendererFunc func(context.Context, string) ([]byte, error)
 func (f rendererFunc) Render(ctx context.Context, url string) ([]byte, error) { return f(ctx, url) }
 
 func TestCompleteWindowOrNoResult(t *testing.T) {
-	first := samplePage(t)
-	second := strings.NewReplacer("第 1 页", "第 2 页", "10001", "20001", "10002", "20002").Replace(first)
-	for _, mode := range []string{"success", "failure", "overlap", "wrong page"} {
-		t.Run(mode, func(t *testing.T) {
-			calls := 0
-			client := &Client{Browser: rendererFunc(func(ctx context.Context, url string) ([]byte, error) {
-				calls++
-				if calls == 1 {
-					return []byte(first), nil
-				}
-				if !strings.HasSuffix(url, "?page=2") {
-					t.Fatal("wrong page URL")
-				}
-				switch mode {
-				case "failure":
-					return nil, errors.New("temporary fetch failure")
-				case "overlap":
-					return []byte(strings.Replace(first, "第 1 页", "第 2 页", 1)), nil
-				case "wrong page":
-					return []byte(first), nil
-				default:
-					return []byte(second), nil
-				}
-			})}
-			result, err := client.Fetch(context.Background(), config.Subscription{Type: config.AliyunCVE, Pages: 5})
-			if mode == "success" {
-				if err != nil || len(result.Notices) != 4 || calls != 2 {
-					t.Fatalf("window or last page: %d %d %v", len(result.Notices), calls, err)
-				}
-			} else if err == nil || len(result.Notices) != 0 {
-				t.Fatalf("partial scan exposed: %d %v", len(result.Notices), err)
+	for _, kind := range []string{config.AliyunCVE, config.AliyunHighRisk} {
+		t.Run(kind, func(t *testing.T) {
+			first := samplePage(t)
+			listURL := config.AliyunCVEURL
+			if kind == config.AliyunHighRisk {
+				first = highRiskSample(t)
+				listURL = config.AliyunHighRiskURL
+			}
+			second := strings.NewReplacer("第 1 页", "第 2 页", "10001", "20001", "10002", "20002").Replace(first)
+			for _, mode := range []string{"success", "failure", "overlap", "wrong page"} {
+				t.Run(mode, func(t *testing.T) {
+					calls := 0
+					client := &Client{Browser: rendererFunc(func(ctx context.Context, url string) ([]byte, error) {
+						calls++
+						if !strings.HasPrefix(url, listURL+"?page=") {
+							t.Fatalf("wrong source URL: %s", url)
+						}
+						if calls == 1 {
+							return []byte(first), nil
+						}
+						if !strings.HasSuffix(url, "?page=2") {
+							t.Fatal("wrong page URL")
+						}
+						switch mode {
+						case "failure":
+							return nil, errors.New("temporary fetch failure")
+						case "overlap":
+							return []byte(strings.Replace(first, "第 1 页", "第 2 页", 1)), nil
+						case "wrong page":
+							return []byte(first), nil
+						default:
+							return []byte(second), nil
+						}
+					})}
+					result, err := client.Fetch(context.Background(), config.Subscription{Type: kind, Pages: 5})
+					if mode == "success" {
+						if err != nil || len(result.Notices) != 4 || calls != 2 {
+							t.Fatalf("window or last page: %d %d %v", len(result.Notices), calls, err)
+						}
+					} else if err == nil || len(result.Notices) != 0 {
+						t.Fatalf("partial scan exposed: %d %v", len(result.Notices), err)
+					}
+				})
 			}
 		})
 	}

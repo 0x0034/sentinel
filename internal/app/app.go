@@ -117,7 +117,7 @@ func (a *App) Digests(ctx context.Context, now time.Time) error {
 			continue
 		}
 		var notices []model.Notice
-		if sub.Type == config.AliyunCVE {
+		if config.IsVulnerabilitySource(sub.Type) {
 			notices, err = a.Store.DiscoveredBetween(ctx, sub.ID, start, today)
 		} else {
 			notices, err = a.Store.NoticesBetween(ctx, sub.ID, start, today)
@@ -126,7 +126,7 @@ func (a *App) Digests(ctx context.Context, now time.Time) error {
 			return err
 		}
 		digest := notify.Digest
-		if sub.Type == config.AliyunCVE {
+		if config.IsVulnerabilitySource(sub.Type) {
 			digest = notify.VulnerabilityDigest
 		}
 		payloads, err := digest(sub.Name, date, notices, a.Config.Location, a.failed[sub.ID])
