@@ -1,0 +1,19 @@
+services:
+  sentinel:
+    image: registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.1.0
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:?Set FEISHU_WEBHOOK_URL in your environment}
+    volumes:
+      - ./config.yaml:/etc/sentinel/config.yaml:ro
+      - sentinel-data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s
+
+volumes:
+  sentinel-data:

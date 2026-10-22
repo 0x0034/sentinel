@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>Sentinel test feed — synthetic data</title>
+<link>https://github.com/0x0034/sentinel</link>
+<description>Test fixture, not real Aliyun notices.</description>
+<item><guid>test-old</guid><title>Baseline test notice</title><link>https://example.com/old</link><pubDate>Wed, 21 Oct 2026 08:00:00 +0800</pubDate><description><![CDATA[<p>Existing sample notice.</p>]]></description></item>
+</channel></rss>

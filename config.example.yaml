@@ -1,0 +1,11 @@
+database: /data/sentinel.db
+poll_interval: 5m
+digest_time: "09:00"
+timezone: Asia/Shanghai
+subscriptions:
+  - id: aliyun-security
+    name: 阿里云安全公告
+    url: https://rsshub.app/aliyun/notice/2
+    webhook_env: FEISHU_WEBHOOK_URL
+    incremental: true
+    digest: true
