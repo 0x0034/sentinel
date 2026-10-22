@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +18,11 @@ import (
 )
 
 const MaxPayloadBytes = 18 * 1024
+
+// JSON 2.0 counts both components and nested text elements toward this limit.
+const maxCardElements = 200
+
+var errCardElements = errors.New("card exceeds element limit")
 
 func clip(s string, n int) string {
 	r := []rune(s)
@@ -35,13 +42,16 @@ func card(title, intro string, notices []model.Notice, loc *time.Location) ([]by
 }
 
 func renderCard(title, intro string, notices []model.Notice, loc *time.Location, detailLimit int) ([]byte, error) {
-	elements := []any{map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": intro}}}
-	for _, n := range notices {
-		published := "发布时间未提供"
-		if n.PublishedAt != nil {
-			published = n.PublishedAt.In(loc).Format("2006-01-02 15:04 MST")
+	introColor := "grey"
+	if strings.Contains(intro, "抓取失败") {
+		introColor = "red"
+	}
+	elements := []any{plainText(intro, "notation", introColor)}
+	for i, n := range notices {
+		if i > 0 {
+			elements = append(elements, map[string]any{"tag": "hr"})
 		}
-		text := clip(n.Title, 200) + "\n" + published
+		elements = append(elements, plainText(clip(n.Title, 200), "heading", "default"))
 		if v := n.Vulnerability; v != nil {
 			score, disclosed, cve := "未知", "未提供", v.CVEID
 			if v.CVSS != nil {
@@ -53,32 +63,111 @@ func renderCard(title, intro string, notices []model.Notice, loc *time.Location,
 			if cve == "" {
 				cve = "未提供"
 			}
-			text = clip(n.Title, 200) + "\nCVE：" + clip(cve, 100) + "\nAVD：" + clip(v.AVDID, 120) + "\n漏洞类型：" + clip(v.Type, 120) + "\nCVSS：" + score + "\n披露日期：" + disclosed
-			if v.Status != "" {
-				text += "\n漏洞状态：" + clip(v.Status, 120)
-			}
-			if !n.FirstSeen.IsZero() {
-				text += "\n首次发现：" + n.FirstSeen.In(loc).Format("2006-01-02 15:04 MST")
-			}
 			description, solution, affected, aliyunScore := "详情暂未获取，请查看原文", "详情暂未获取，请查看原文", "详情暂未获取，请查看原文", "暂未获取"
+			aliyunColor := "grey"
 			if d := v.Details; d != nil {
 				description, solution, affected = detailValue(d.Description, detailLimit), detailValue(d.Solution, detailLimit), detailValue(d.AffectedSoftware, detailLimit)
 				aliyunScore = "来源未提供"
 				if d.AliyunScore != nil {
 					aliyunScore = strconv.FormatFloat(*d.AliyunScore, 'f', 1, 64) + " / 10"
+					aliyunColor = "red"
 				}
 			}
-			text += "\n阿里云评分：" + aliyunScore + "\n\n漏洞描述：\n" + description + "\n\n解决建议：\n" + solution + "\n\n受影响软件情况：\n" + affected
+			elements = append(elements, twoColumns(
+				plainText("阿里云评分："+aliyunScore, "heading", aliyunColor),
+				plainText("CVSS："+score, "normal", "default"),
+			))
+			identity := "AVD：" + clip(v.AVDID, 120) + "\nCVE：" + clip(cve, 100) + "\n漏洞类型：" + clip(v.Type, 120)
+			timeline := "披露日期：" + clip(disclosed, 120)
+			if v.Status != "" {
+				timeline += "\n漏洞状态：" + clip(v.Status, 120)
+			}
+			if !n.FirstSeen.IsZero() {
+				timeline += "\n首次发现：" + displayTime(n.FirstSeen, loc)
+			}
+			elements = append(elements, twoColumns(plainText(identity, "normal", "default"), plainText(timeline, "normal", "default")))
+			elements = append(elements, detailSection("漏洞描述", description)...)
+			elements = append(elements, detailSection("解决建议", solution)...)
+			elements = append(elements, detailSection("受影响软件情况", affected)...)
+		} else {
+			published := "发布时间未提供"
+			if n.PublishedAt != nil {
+				published = "发布时间：" + displayTime(*n.PublishedAt, loc)
+			}
+			elements = append(elements, plainText(published, "notation", "grey"))
 		}
 		if n.Summary != "" {
-			text += "\n" + clip(n.Summary, 600)
+			elements = append(elements, plainText(clip(n.Summary, 600), "normal", "default"))
 		}
-		elements = append(elements, map[string]string{"tag": "hr"}, map[string]any{"tag": "div", "text": map[string]string{"tag": "plain_text", "content": text}})
-		if n.Link != "" && len(n.Link) <= 2048 {
-			elements = append(elements, map[string]any{"tag": "action", "actions": []any{map[string]any{"tag": "button", "text": map[string]string{"tag": "plain_text", "content": "查看原文"}, "url": n.Link, "type": "default"}}})
+		if validCardLink(n.Link) {
+			elements = append(elements, map[string]any{
+				"tag": "button", "text": map[string]any{"tag": "plain_text", "content": "查看原文"},
+				"type": "default", "size": "medium", "width": "fill",
+				"behaviors": []any{map[string]any{"type": "open_url", "default_url": n.Link}},
+			})
 		}
 	}
-	return json.Marshal(map[string]any{"msg_type": "interactive", "card": map[string]any{"config": map[string]bool{"wide_screen_mode": true}, "header": map[string]any{"template": "red", "title": map[string]string{"tag": "plain_text", "content": title}}, "elements": elements}})
+	card := map[string]any{
+		"schema": "2.0",
+		"config": map[string]any{"update_multi": true, "summary": map[string]any{"content": fmt.Sprintf("%s · %d 条", title, len(notices))}},
+		"header": map[string]any{"template": "red", "title": map[string]any{"tag": "plain_text", "content": title}},
+		"body":   map[string]any{"direction": "vertical", "padding": "12px", "vertical_spacing": "8px", "elements": elements},
+	}
+	if countCardElements(card) > maxCardElements {
+		return nil, errCardElements
+	}
+	return json.Marshal(map[string]any{"msg_type": "interactive", "card": card})
+}
+
+func plainText(content, size, color string) map[string]any {
+	return map[string]any{"tag": "div", "text": map[string]any{
+		"tag": "plain_text", "content": content, "text_size": size, "text_color": color,
+	}}
+}
+
+func twoColumns(left, right map[string]any) map[string]any {
+	return map[string]any{"tag": "column_set", "flex_mode": "stretch", "horizontal_spacing": "12px", "columns": []any{
+		map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{left}},
+		map[string]any{"tag": "column", "width": "weighted", "weight": 1, "elements": []any{right}},
+	}}
+}
+
+func detailSection(label, value string) []any {
+	// Only application-owned labels are Markdown. Source text stays literal.
+	return []any{
+		map[string]any{"tag": "markdown", "content": "**" + label + "**", "margin": "8px 0px 0px 0px"},
+		plainText(value, "normal", "default"),
+	}
+}
+
+func displayTime(value time.Time, loc *time.Location) string {
+	if loc.String() == "Asia/Shanghai" {
+		return value.In(loc).Format("2006-01-02 15:04") + " 北京时间"
+	}
+	return value.In(loc).Format("2006-01-02 15:04 MST")
+}
+
+func validCardLink(value string) bool {
+	u, err := url.ParseRequestURI(value)
+	return len(value) <= 2048 && err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Hostname() != "" && u.User == nil
+}
+
+func countCardElements(value any) int {
+	count := 0
+	switch value := value.(type) {
+	case map[string]any:
+		if _, ok := value["tag"]; ok {
+			count++
+		}
+		for _, child := range value {
+			count += countCardElements(child)
+		}
+	case []any:
+		for _, child := range value {
+			count += countCardElements(child)
+		}
+	}
+	return count
 }
 
 func detailValue(value string, limit int) string {
@@ -132,10 +221,10 @@ func digest(name, date string, notices []model.Notice, loc *time.Location, degra
 		index := len(groups) - 1
 		candidate := append(append([]model.Notice{}, groups[index]...), n)
 		body, err := card(title, intro, candidate, loc)
-		if err != nil {
+		if err != nil && !errors.Is(err, errCardElements) {
 			return nil, err
 		}
-		if len(body) > MaxPayloadBytes-128 {
+		if errors.Is(err, errCardElements) || len(body) > MaxPayloadBytes-128 {
 			if len(groups[index]) == 0 {
 				return nil, errors.New("notice exceeds card size limit")
 			}

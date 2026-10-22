@@ -84,8 +84,9 @@ docs/                 设计、领域决策与操作文档
 ### 消息呈现与异常
 
 - 卡片标题统一使用 `header.template="red"`，正文包含公告标题、北京时间、清理 HTML 后的摘要和原文链接。
+- 新卡片采用 JSON 2.0（要求飞书客户端 7.20+），组件放在 `body.elements`，原文按钮使用 `behaviors.open_url`。正文标题、分栏元信息、章节标题分别排版；来源内容使用 `plain_text`，仅应用固定章节标题使用 Markdown。窄屏分栏采用 `flex_mode="stretch"`，采集失败提示使用红字。现有 SQLite 投递 payload 不重写。
 - 摘要直接从公告内容提取并截断，不引入 AI 摘要服务。
-- 增量通常一篇公告一张卡片；汇总按实际编码后的请求体字节数分片，包含日期和页码，留出低于 20 KB 上限的余量。
+- 增量通常一篇公告一张卡片；汇总同时按实际编码后的请求体字节数及 JSON 2.0 元素数分片，包含日期和页码，限制为 18 KiB、200 个元素（包括嵌套文本），留出低于机器人 20 KB 上限的余量。
 - 先处理本轮抓取，再生成到期汇总。抓取失败不推进成功状态，保留已有记录并等待下次轮询。
 - 对缺乏采集记录或当前抓取失败的汇总明确提示数据范围或采集异常，避免把采集故障显示为确定的“无公告”。
 - HTTP 请求设置超时、响应体上限和取消支持；日志输出订阅标识和操作结果，屏蔽 webhook、正文及凭证。
@@ -125,3 +126,8 @@ docs/                 设计、领域决策与操作文档
 - [RSSHub 阿里云公告路由](https://github.com/DIYgod/RSSHub/blob/master/lib/routes/aliyun/notice.ts)
 - [飞书自定义机器人指南](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)
 - [飞书卡片颜色枚举](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/enumerations-for-fields-related-to-color)
+- [卡片 JSON 2.0 结构与限制](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-structure)
+- [JSON 2.0 版本变更](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-breaking-changes-release-notes)
+- [普通文本组件](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/content-components/plain-text)
+- [自适应分栏组件](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/containers/column-set)
+- [按钮组件](https://open.feishu.cn/document/uAjLw4CM/ukzMukzMukzM/feishu-cards/card-json-v2-components/interactive-components/button)

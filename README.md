@@ -6,7 +6,7 @@
 
 ## 使用 Docker
 
-候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.3`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
+候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.4`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
 
 1. 复制示例，保留需要的订阅并编辑 RSS 地址（仅使用漏洞库时可删除 RSS 条目）：
 
@@ -59,6 +59,8 @@
 
 目前支持无需额外签名的飞书自定义机器人 webhook。若机器人配置了 IP 白名单或关键词限制，需要让运行环境和卡片内容符合其设置；服务会将非零业务响应作为失败重试。需要签名的机器人需要先扩展配置与签名支持。
 
+新生成的通知使用飞书卡片 JSON 2.0，需要飞书客户端 **7.20 及以上**；旧客户端只显示标题和升级提示。红色标题、独立正文标题、评分与元信息分栏、加粗章节标题和原文按钮用于区分信息层级，窄屏下分栏上下堆叠。来源文本始终按纯文本显示，保留换行与版本符号，不执行来源中的 Markdown 或 @ 标签。SQLite 中已生成的待发卡片保持原样。
+
 ## 通知规则
 
 - 首次成功抓取建立基线，保存但不补推历史增量；失败请求不会建立基线。
@@ -66,7 +68,7 @@
 - RSS 昨日汇总按公告发布时间筛选，包含基线公告；没有发布时间的公告不进入汇总。漏洞库使用“昨日新发现”，按 Sentinel 首次成功保存时间统计，排除初始化基线，来源披露日期单独显示。
 - 09:00 后恢复时，仅补生成昨天的汇总；更早已经生成的失败任务仍会重试。
 - 空日仍发送汇总，RSS 显示“未采集到昨日公告”，漏洞库显示“未发现昨日新增漏洞记录”。抓取失败会注明，避免误报为平台没有发布内容。
-- 汇总生成后内容固定，按请求体大小拆分，每张卡片小于 18 KiB；迟到公告不重做已生成的汇总。
+- 汇总生成后内容固定，同时按请求体大小和元素数量拆分，每张卡片不超过 18 KiB、200 个元素（包含嵌套文本）；迟到公告不重做已生成的汇总。
 - 发送失败从 30 秒开始指数退避，最长间隔 30 分钟，不自动丢弃任务。共享机器人合并节流，每秒最多发送一次。
 - 只有 HTTP 成功且 JSON `code: 0` 才确认成功。响应丢失或发送成功后进程崩溃可能造成少量重复；不提供严格恰好一次保证。
 - 历史公告与任务首版不自动删除，需保留数据卷并按运行规模安排备份和磁盘监控。
@@ -83,7 +85,7 @@
 
 首次静默基线不批量抓取详情。基线之后的新条目在生成通知前尝试补齐详情，成功结果存入 SQLite 并复用；旧版尚无详情的非基线记录在再次进入扫描窗口时也会补抓。每个订阅每轮最多 20 次详情请求、总时限 90 秒，未尝试过的条目优先，之后按最早尝试时间重试。详情失败或超出本轮限额时仍发送基础通知，四项详情字段明确显示“暂未获取”，后续轮询继续补齐。已生成的通知内容保持固定，补齐详情不另发增量提醒；后续昨日汇总使用已保存的详情。成功详情为采集时快照，不自动周期刷新。
 
-卡片保留段落、版本范围和建议中的链接；超长字段显示截断提示及原文按钮，按实际 JSON 字节控制单张 18 KiB 上限并拆分汇总。
+卡片保留段落、版本范围和建议中的链接文本；阿里云评分与 CVSS 并列显示，漏洞描述、解决建议、受影响软件情况独立分节。超长字段显示截断提示及原文按钮，按实际 JSON 字节和嵌套元素数量拆分汇总。采集失败说明使用红字，缺失字段仍明确显示未知或暂未获取。
 
 浏览器使用独立临时配置和最小环境，不继承机器人凭证。普通 HTTP 目前可能收到 WAF 挑战，因此使用 Chromium 渲染后校验业务表格；生产可达性取决于网络和站点策略，浏览器退出成功并不等于有效采集。
 
@@ -107,7 +109,7 @@ bin/sentinel version
 make image
 ```
 
-Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.3`），候选版本不更新 `latest`。
+Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.4`），候选版本不更新 `latest`。
 
 运行基础镜像使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22` 并固定 digest。APK 软件源使用 `https://mirrors.aliyun.com/alpine/`，安装 Chromium 和 TLS 证书前完成替换。`APK_DOWNLOAD_BASE` 构建参数默认也是该源，可在构建机器上指向同源缓存转发以改善下载速度；不改变最终镜像的 APK 源或运行环境。Alpine 包签名验证始终启用。
 
@@ -115,4 +117,4 @@ Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzh
 
 测试使用临时 SQLite、RSS/HTML 样例、本地 HTTP 服务和模拟浏览器，不调用真实机器人。覆盖跨时区日期边界、基线与增量、修改去重、故障和重启恢复、分片、业务响应、共享目标节流、数据库迁移、完整分页及浏览器生命周期。
 
-设计见 [RSS 方案](docs/design/rss-feishu.md)、[漏洞库方案](docs/design/aliyun-vulnerability-source.md)、[领域词汇](GLOSSARY.md) 和 [投递决策](docs/adr/0001-durable-notification-delivery.md)。详情补充验收见 [rc.3 记录](docs/verification/2026-10-22-details.md)，高风险来源验收见 [高风险来源验收记录](docs/verification/2026-10-22-high-risk.md)，此前 CVE 验收见 [rc.1 验收记录](docs/verification/2026-10-22-cve.md)，历史版本见 [0.1.0 验收记录](docs/verification/2026-10-22.md)。
+设计见 [RSS 方案](docs/design/rss-feishu.md)、[漏洞库方案](docs/design/aliyun-vulnerability-source.md)、[领域词汇](GLOSSARY.md) 和 [投递决策](docs/adr/0001-durable-notification-delivery.md)。卡片排版验收见 [rc.4 记录](docs/verification/2026-10-22-card-layout.md)，详情补充验收见 [rc.3 记录](docs/verification/2026-10-22-details.md)，高风险来源验收见 [高风险来源验收记录](docs/verification/2026-10-22-high-risk.md)，此前 CVE 验收见 [rc.1 验收记录](docs/verification/2026-10-22-cve.md)，历史版本见 [0.1.0 验收记录](docs/verification/2026-10-22.md)。
