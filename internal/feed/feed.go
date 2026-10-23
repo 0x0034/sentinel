@@ -19,11 +19,6 @@ import (
 
 const MaxFeedBytes = 8 << 20
 
-type Result struct {
-	Notices          []model.Notice
-	Skipped, Undated int
-}
-
 type Client struct{ HTTP *http.Client }
 
 func NewClient() *Client {
@@ -38,34 +33,34 @@ func NewClient() *Client {
 	}}}
 }
 
-func (c *Client) Fetch(ctx context.Context, source string) (Result, error) {
+func (c *Client) Fetch(ctx context.Context, source string) (model.FetchResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
-		return Result{}, errors.New("invalid RSS request")
+		return model.FetchResult{}, errors.New("invalid RSS request")
 	}
 	req.Header.Set("User-Agent", "Sentinel/0.1 RSS monitor")
 	req.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return Result{}, errors.New("RSS request failed or timed out")
+		return model.FetchResult{}, errors.New("RSS request failed or timed out")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Result{}, fmt.Errorf("RSS returned HTTP %d", resp.StatusCode)
+		return model.FetchResult{}, fmt.Errorf("RSS returned HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxFeedBytes+1))
 	if err != nil || len(body) > MaxFeedBytes {
-		return Result{}, errors.New("RSS response unreadable or larger than 8 MiB")
+		return model.FetchResult{}, errors.New("RSS response unreadable or larger than 8 MiB")
 	}
 	return Parse(string(body))
 }
 
-func Parse(body string) (Result, error) {
+func Parse(body string) (model.FetchResult, error) {
 	f, err := gofeed.NewParser().ParseString(body)
 	if err != nil {
-		return Result{}, errors.New("invalid RSS or Atom document")
+		return model.FetchResult{}, errors.New("invalid RSS or Atom document")
 	}
-	result := Result{}
+	result := model.FetchResult{}
 	seen := map[string]bool{}
 	for _, item := range f.Items {
 		identity := strings.TrimSpace(item.GUID)

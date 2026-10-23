@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/0x0034/sentinel/internal/config"
-	"github.com/0x0034/sentinel/internal/feed"
 	"github.com/0x0034/sentinel/internal/model"
 	"github.com/0x0034/sentinel/internal/notify"
 	"github.com/0x0034/sentinel/internal/store"
 )
 
 type Fetcher interface {
-	Fetch(context.Context, string) (feed.Result, error)
+	Fetch(context.Context, config.Subscription) (model.FetchResult, error)
 }
 type Sender interface {
 	Send(context.Context, string, []byte) error
@@ -36,6 +35,7 @@ type App struct {
 	Fetcher Fetcher
 	Sender  Sender
 	Log     *slog.Logger
+	Now     func() time.Time
 	failed  map[string]bool
 }
 
@@ -43,15 +43,38 @@ func New(c config.Config, s *store.Store, f Fetcher, n Sender, log *slog.Logger)
 	return &App{Config: c, Store: s, Fetcher: f, Sender: n, Log: log, failed: map[string]bool{}}
 }
 
+func (a *App) validateSources(ctx context.Context) error {
+	for _, sub := range a.Config.Subscriptions {
+		if err := a.Store.EnsureSource(ctx, sub.ID, sub.Type); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) Poll(ctx context.Context, now time.Time) error {
+	if err := a.validateSources(ctx); err != nil {
+		return err
+	}
+	started := time.Now()
 	var failures []error
 	for _, sub := range a.Config.Subscriptions {
-		result, err := a.Fetcher.Fetch(ctx, sub.URL)
+		result, err := a.Fetcher.Fetch(ctx, sub)
 		if err != nil {
 			a.failed[sub.ID] = true
 			a.Log.Warn("feed fetch failed", "subscription", sub.ID, "error", err)
 			failures = append(failures, fmt.Errorf("subscription %s fetch failed", sub.ID))
 			continue
+		}
+		if err := a.enrich(ctx, sub, result.Notices); err != nil {
+			return err
+		}
+		completed := now.Add(time.Since(started))
+		if a.Now != nil {
+			completed = a.Now()
+		}
+		for i := range result.Notices {
+			result.Notices[i].FirstSeen = completed
 		}
 		payloads := map[string][]byte{}
 		if sub.Incremental {
@@ -63,7 +86,7 @@ func (a *App) Poll(ctx context.Context, now time.Time) error {
 				payloads[notice.ID] = payload
 			}
 		}
-		count, err := a.Store.Ingest(ctx, sub.ID, result.Notices, payloads, now)
+		count, err := a.Store.Ingest(ctx, sub.ID, result.Notices, payloads, completed)
 		if err != nil {
 			return err
 		}
@@ -96,11 +119,20 @@ func (a *App) Digests(ctx context.Context, now time.Time) error {
 		if exists {
 			continue
 		}
-		notices, err := a.Store.NoticesBetween(ctx, sub.ID, start, today)
+		var notices []model.Notice
+		if config.IsVulnerabilitySource(sub.Type) {
+			notices, err = a.Store.DiscoveredBetween(ctx, sub.ID, start, today)
+		} else {
+			notices, err = a.Store.NoticesBetween(ctx, sub.ID, start, today)
+		}
 		if err != nil {
 			return err
 		}
-		payloads, err := notify.Digest(sub.Name, date, notices, a.Config.Location, a.failed[sub.ID])
+		digest := notify.Digest
+		if config.IsVulnerabilitySource(sub.Type) {
+			digest = notify.VulnerabilityDigest
+		}
+		payloads, err := digest(sub.Name, date, notices, a.Config.Location, a.failed[sub.ID])
 		if err != nil {
 			return err
 		}
@@ -148,10 +180,12 @@ func (a *App) Drain(ctx context.Context, now time.Time) error {
 }
 
 func (a *App) Once(ctx context.Context, now time.Time) error {
+	started := time.Now()
 	pollErr := a.Poll(ctx, now)
 	if pollErr != nil && !transientFetch(pollErr) {
 		return pollErr
 	}
+	now = now.Add(time.Since(started))
 	if err := a.Digests(ctx, now); err != nil {
 		return err
 	}
@@ -162,6 +196,9 @@ func (a *App) Once(ctx context.Context, now time.Time) error {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	if err := a.validateSources(ctx); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	workerDone := make(chan error, 1)
@@ -232,4 +269,10 @@ func TestNotices(now time.Time, loc *time.Location) []model.Notice {
 	local := now.In(loc)
 	yesterday := time.Date(local.Year(), local.Month(), local.Day()-1, 12, 0, 0, 0, loc)
 	return []model.Notice{{ID: "sentinel-test", Title: "【测试样例】Sentinel 公告通知验证", Summary: "这是一条测试样例，用于验证红色消息卡片、发布时间、摘要与原文链接；不是阿里云实际公告。", Link: "https://github.com/0x0034/sentinel", PublishedAt: &yesterday}}
+}
+
+func TestVulnerabilities(now time.Time, loc *time.Location) []model.Notice {
+	local := now.In(loc)
+	seen := time.Date(local.Year(), local.Month(), local.Day()-1, 12, 0, 0, 0, loc)
+	return []model.Notice{{ID: "sentinel-cve-test", Title: "【测试样例】Sentinel 漏洞通知验证", Link: "https://github.com/0x0034/sentinel", Summary: "这是虚构的测试条目，用于验证新发现与昨日汇总，不是实际漏洞。", FirstSeen: seen, Vulnerability: &model.Vulnerability{AVDID: "AVD-TEST-0001", CVEID: "测试编号", Type: "测试类型", DisclosureDate: seen.AddDate(0, 0, -30).Format("2006-01-02")}}}
 }

@@ -16,10 +16,16 @@ Use a single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agent
 
 - Use Go **1.27.2**. `make` pins `GOTOOLCHAIN=go1.27.2`; do not silently upgrade it.
 - Entrypoint: `cmd/sentinel`. Application packages live under `internal/`; implementation and behavior are described in `docs/design/rss-feishu.md`.
+- Aliyun vulnerability source behavior is in `docs/design/aliyun-vulnerability-source.md`. The default subscription monitors `/high-risk/list`; `aliyun_cve` preserves `/nvd/list` compatibility. Chromium renders list pages; AVD IDs define identity. Both high-risk and CVE digests use first discovery time and exclude initialization baselines; RSS digests keep publication-time semantics.
+- Database schema changes require migration coverage preserving old RSS state and pending payloads. Changing a subscription source type requires a new subscription ID.
+- Detail enrichment uses the verified detail headings and identity. Keep Aliyun scores separate from CVSS, and affected software separate from protection products. Persist details in existing vulnerability JSON; first-run baselines do not fetch details. See `docs/adr/0005-vulnerability-details.md`.
+- New notifications use Feishu card JSON 2.0 (client 7.20+). Keep source text literal, and split digests at both 18 KiB and 200 tagged elements including nested text. See `docs/design/rss-feishu.md`; never rewrite existing delivery payloads for layout changes.
+- Browser subprocesses must use isolated temporary profiles and a minimal environment without webhook credentials. Validate business DOM and pagination, not only process exit or HTTP status.
 - Run `make check test build` after behavior changes. Tests use local HTTP servers and temporary SQLite databases; they do not send real robot messages.
 - SQLite is the durable store. Run one service instance per database; container data lives in `/data` and must be persisted.
 - Keep webhook values in environment variables. Config files contain environment variable names only; do not log webhook URLs or commit credentials.
 - Build Docker images for `linux/amd64`. The build base is `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27`; the compiler remains Go 1.27.2 even if the base contains a different patch version.
 - The runtime base is `registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22`; use `https://mirrors.aliyun.com/alpine/` for its APK repositories.
 - `make image` builds the image; `make push` publishes to `registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel`. Publishing and `send-test` require authorization for the specific task.
+- Image targets operate on `VERSION` only; release candidates must not move `latest`.
 - The configured public RSSHub source has returned HTTP 403. Distinguish fixture tests, real robot tests, and live-source checks in verification reports.

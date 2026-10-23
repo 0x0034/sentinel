@@ -48,3 +48,38 @@ func TestConfiguration(t *testing.T) {
 		t.Fatal("invalid webhook must be rejected without leaking")
 	}
 }
+
+func TestSourceConfigurationAndLegacyDefaults(t *testing.T) {
+	lookup := func(string) string { return "https://open.feishu.cn/open-apis/bot/v2/hook/test-placeholder" }
+	legacy, err := Decode(strings.NewReader(valid), lookup)
+	if err != nil || legacy.Subscriptions[0].Type != RSS || legacy.Subscriptions[0].Pages != 0 {
+		t.Fatal("legacy RSS configuration changed")
+	}
+	cve := strings.Replace(valid, "url: https://example.com/feed", "type: aliyun_cve", 1)
+	c, err := Decode(strings.NewReader(cve), lookup)
+	if err != nil || c.Subscriptions[0].URL != AliyunCVEURL || c.Subscriptions[0].Pages != 5 || c.Browser.PageTimeout != 45*time.Second {
+		t.Fatalf("CVE defaults: %+v %v", c, err)
+	}
+	highRisk := strings.Replace(cve, "aliyun_cve", "aliyun_high_risk", 1)
+	for _, body := range []string{highRisk, strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    url: https://avd.aliyun.com/high-risk/list", 1)} {
+		c, err := Decode(strings.NewReader(body), lookup)
+		if err != nil || c.Subscriptions[0].URL != "https://avd.aliyun.com/high-risk/list" || c.Subscriptions[0].Pages != 5 {
+			t.Fatalf("high-risk source: %+v %v", c, err)
+		}
+	}
+	for _, bad := range []string{
+		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    url: https://avd.aliyun.com/nvd/list", 1),
+		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    pages: 21", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    url: https://avd.aliyun.com/high-risk/list", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: unsupported", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    pages: -1", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    pages: 21", 1),
+		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    url: https://example.com", 1),
+		strings.Replace(valid, "url:", "pages: 5\n    url:", 1),
+		"browser:\n  page_timeout: 3m\n" + cve,
+	} {
+		if _, err := Decode(strings.NewReader(bad), lookup); err == nil {
+			t.Fatal("invalid source configuration accepted")
+		}
+	}
+}

@@ -14,8 +14,8 @@ import (
 
 	"github.com/0x0034/sentinel/internal/app"
 	"github.com/0x0034/sentinel/internal/config"
-	"github.com/0x0034/sentinel/internal/feed"
 	"github.com/0x0034/sentinel/internal/notify"
+	"github.com/0x0034/sentinel/internal/source"
 	"github.com/0x0034/sentinel/internal/store"
 )
 
@@ -66,6 +66,13 @@ func run(log *slog.Logger) error {
 		for _, sub := range cfg.Subscriptions {
 			now := time.Now()
 			notices := app.TestNotices(now, cfg.Location)
+			digest := notify.Digest
+			date := notices[0].PublishedAt.In(cfg.Location).Format("2006-01-02")
+			if config.IsVulnerabilitySource(sub.Type) {
+				notices = app.TestVulnerabilities(now, cfg.Location)
+				digest = notify.VulnerabilityDigest
+				date = notices[0].FirstSeen.In(cfg.Location).Format("2006-01-02")
+			}
 			incremental, err := notify.Incremental("【测试】"+sub.Name, notices[0], cfg.Location)
 			if err != nil {
 				return err
@@ -73,7 +80,7 @@ func run(log *slog.Logger) error {
 			if err := sender.Send(ctx, sub.Webhook, incremental); err != nil {
 				return err
 			}
-			payloads, err := notify.Digest("【测试】"+sub.Name, notices[0].PublishedAt.In(cfg.Location).Format("2006-01-02"), notices, cfg.Location, false)
+			payloads, err := digest("【测试】"+sub.Name, date, notices, cfg.Location, false)
 			if err != nil {
 				return err
 			}
@@ -91,7 +98,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer db.Close()
-	service := app.New(cfg, db, feed.NewClient(), sender, log)
+	service := app.New(cfg, db, source.NewClient(cfg.Browser), sender, log)
 	if command == "once" {
 		return service.Once(ctx, time.Now())
 	}

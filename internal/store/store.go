@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -61,14 +62,22 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	if version > 2 {
 		return errors.New("database schema is newer than this application")
 	}
 	if _, err := s.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`
-CREATE TABLE IF NOT EXISTS subscriptions (id TEXT PRIMARY KEY, initialized INTEGER NOT NULL DEFAULT 0, last_success INTEGER);
+	if version == 2 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if version == 0 {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS subscriptions (id TEXT PRIMARY KEY, initialized INTEGER NOT NULL DEFAULT 0, last_success INTEGER);
 CREATE TABLE IF NOT EXISTS notices (
  subscription TEXT NOT NULL REFERENCES subscriptions(id), id TEXT NOT NULL, title TEXT NOT NULL, link TEXT NOT NULL,
  summary TEXT NOT NULL, published INTEGER, first_seen INTEGER NOT NULL, PRIMARY KEY(subscription,id));
@@ -79,8 +88,36 @@ CREATE TABLE IF NOT EXISTS deliveries (
  payload BLOB NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL,
  sent_at INTEGER, last_error TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS pending_deliveries ON deliveries(next_attempt,id) WHERE sent_at IS NULL;
-PRAGMA user_version=1;`)
-	return err
+`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+ALTER TABLE subscriptions ADD COLUMN source_type TEXT NOT NULL DEFAULT 'rss';
+ALTER TABLE notices ADD COLUMN baseline INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE notices ADD COLUMN vulnerability TEXT NOT NULL DEFAULT '';
+CREATE INDEX notices_discovered ON notices(subscription,first_seen) WHERE baseline=0;
+PRAGMA user_version=2;`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) EnsureSource(ctx context.Context, sub, kind string) error {
+	if kind == "" {
+		kind = "rss"
+	}
+	if _, err := s.db.ExecContext(ctx, "INSERT OR IGNORE INTO subscriptions(id,source_type) VALUES(?,?)", sub, kind); err != nil {
+		return err
+	}
+	var existing string
+	if err := s.db.QueryRowContext(ctx, "SELECT source_type FROM subscriptions WHERE id=?", sub).Scan(&existing); err != nil {
+		return err
+	}
+	if existing != kind {
+		return errors.New("subscription source type changed; use a new subscription id")
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return errors.Join(s.db.Close(), s.lock.Close()) }
@@ -108,8 +145,16 @@ func (s *Store) Ingest(ctx context.Context, sub string, notices []model.Notice, 
 		if n.PublishedAt != nil {
 			published = n.PublishedAt.Unix()
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO notices(subscription,id,title,link,summary,published,first_seen) VALUES(?,?,?,?,?,?,?)
-ON CONFLICT(subscription,id) DO UPDATE SET title=excluded.title,link=excluded.link,summary=excluded.summary,published=excluded.published`, sub, n.ID, n.Title, n.Link, n.Summary, published, now.Unix())
+		metadata := ""
+		if n.Vulnerability != nil {
+			encoded, err := json.Marshal(n.Vulnerability)
+			if err != nil {
+				return 0, err
+			}
+			metadata = string(encoded)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO notices(subscription,id,title,link,summary,published,first_seen,baseline,vulnerability) VALUES(?,?,?,?,?,?,?,?,?)
+ON CONFLICT(subscription,id) DO UPDATE SET title=excluded.title,link=excluded.link,summary=excluded.summary,published=excluded.published,vulnerability=excluded.vulnerability`, sub, n.ID, n.Title, n.Link, n.Summary, published, now.Unix(), !initialized, metadata)
 		if err != nil {
 			return 0, err
 		}
@@ -133,7 +178,17 @@ func (s *Store) DigestExists(ctx context.Context, sub, date string) (bool, error
 }
 
 func (s *Store) NoticesBetween(ctx context.Context, sub string, start, end time.Time) ([]model.Notice, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,title,link,summary,published FROM notices WHERE subscription=? AND published>=? AND published<? ORDER BY published,id", sub, start.Unix(), end.Unix())
+	return s.between(ctx, sub, start, end, false)
+}
+func (s *Store) DiscoveredBetween(ctx context.Context, sub string, start, end time.Time) ([]model.Notice, error) {
+	return s.between(ctx, sub, start, end, true)
+}
+func (s *Store) between(ctx context.Context, sub string, start, end time.Time, discovered bool) ([]model.Notice, error) {
+	predicate, order := "published>=? AND published<?", "published,id"
+	if discovered {
+		predicate, order = "first_seen>=? AND first_seen<? AND baseline=0", "first_seen,id"
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id,title,link,summary,published,first_seen,vulnerability FROM notices WHERE subscription=? AND "+predicate+" ORDER BY "+order, sub, start.Unix(), end.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +196,22 @@ func (s *Store) NoticesBetween(ctx context.Context, sub string, start, end time.
 	var result []model.Notice
 	for rows.Next() {
 		var n model.Notice
-		var published int64
-		if err := rows.Scan(&n.ID, &n.Title, &n.Link, &n.Summary, &published); err != nil {
+		var published sql.NullInt64
+		var firstSeen int64
+		var metadata string
+		if err := rows.Scan(&n.ID, &n.Title, &n.Link, &n.Summary, &published, &firstSeen, &metadata); err != nil {
 			return nil, err
 		}
-		t := time.Unix(published, 0)
-		n.PublishedAt = &t
+		if published.Valid {
+			date := time.Unix(published.Int64, 0)
+			n.PublishedAt = &date
+		}
+		n.FirstSeen = time.Unix(firstSeen, 0)
+		if metadata != "" {
+			if err := json.Unmarshal([]byte(metadata), &n.Vulnerability); err != nil {
+				return nil, errors.New("invalid stored vulnerability metadata")
+			}
+		}
 		result = append(result, n)
 	}
 	return result, rows.Err()

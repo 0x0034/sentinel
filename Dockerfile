@@ -9,19 +9,24 @@ COPY cmd ./cmd
 COPY internal ./internal
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0-rc.4
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o /out/sentinel ./cmd/sentinel
 
-FROM registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22@sha256:dc92f017beea8e7f43263073d717f7bc011228c95d5312e440deb4d035bb4eec
+FROM registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22@sha256:dc92f017beea8e7f43263073d717f7bc011228c95d5312e440deb4d035bb4eec AS runtime
+ARG APK_DOWNLOAD_BASE=https://mirrors.aliyun.com/alpine
 RUN sed -i 's|https://dl-cdn.alpinelinux.org/alpine|https://mirrors.aliyun.com/alpine|g' /etc/apk/repositories \
-    && apk add --no-cache ca-certificates \
+    && apk --no-cache --repositories-file /dev/null \
+        --repository "$APK_DOWNLOAD_BASE/v3.22/main" \
+        --repository "$APK_DOWNLOAD_BASE/v3.22/community" add ca-certificates chromium \
     && addgroup -S -g 65532 sentinel \
     && adduser -S -u 65532 -G sentinel sentinel \
     && mkdir -p /data /etc/sentinel \
     && chown sentinel:sentinel /data
+USER 65532:65532
+
+FROM runtime AS final
 COPY --from=build /out/sentinel /usr/local/bin/sentinel
 COPY config.example.yaml /etc/sentinel/config.yaml
-USER 65532:65532
 VOLUME ["/data"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/sentinel"]

@@ -133,3 +133,58 @@ func TestSharedTargetThrottleAndRedirect(t *testing.T) {
 		t.Fatal("webhook payload reached redirected destination")
 	}
 }
+
+func TestVulnerabilityCardsUseDiscoveryDateAndPreserveZeroScore(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 10, 21, 0, 1, 0, 0, loc)
+	zero := 0.0
+	n := model.Notice{Title: "CVE test", FirstSeen: now, Vulnerability: &model.Vulnerability{AVDID: "AVD-2026-10001", CVEID: "CVE-2020-10001", CVSS: &zero, DisclosureDate: "2020-01-01"}}
+	card, err := Incremental("阿里云 CVE", n, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"新发现漏洞", "首次发现：2026-10-21", "披露日期：2020-01-01", "CVSS：0.0", `"template":"red"`} {
+		if !strings.Contains(string(card), want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	n.Vulnerability.CVSS = nil
+	n.Vulnerability.Status = "CVE PoC"
+	cards, err := VulnerabilityDigest("CVE", "2026-10-21", []model.Notice{n}, loc, false)
+	if err != nil || !strings.Contains(string(cards[0]), "CVSS：未知") || !strings.Contains(string(cards[0]), "昨日新发现") || !strings.Contains(string(cards[0]), "漏洞状态：CVE PoC") {
+		t.Fatal("unknown score or discovery digest missing")
+	}
+	empty, err := VulnerabilityDigest("CVE", "2026-10-21", nil, loc, true)
+	if err != nil || !strings.Contains(string(empty[0]), "抓取失败") || !strings.Contains(string(empty[0]), "未发现昨日新增漏洞记录") {
+		t.Fatal("empty vulnerability digest must explain coverage")
+	}
+}
+
+func TestDetailedCardsKeepFieldsAndRespectByteLimit(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+	score := 0.0
+	n := model.Notice{Title: "Detailed test", Link: "https://avd.aliyun.com/detail?id=AVD-2026-10001", Vulnerability: &model.Vulnerability{AVDID: "AVD-2026-10001", Details: &model.VulnerabilityDetails{Description: strings.Repeat("描<&述", 2000), Solution: strings.Repeat("修>&复", 2000), AffectedSoftware: strings.Repeat("软件<&版本", 2000), AliyunScore: &score}}}
+	body, err := Incremental("高风险", n, loc)
+	if err != nil || len(body) > MaxPayloadBytes {
+		t.Fatalf("large detail card failed: %d %v", len(body), err)
+	}
+	for _, want := range []string{"漏洞描述", "解决建议", "受影响软件情况", "阿里云评分：0.0 / 10", "CVSS：未知", "完整内容见原文", `"template":"red"`} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	cards, err := VulnerabilityDigest("高风险", "2026-10-21", []model.Notice{n, n, n, n, n}, loc, false)
+	if err != nil || len(cards) < 2 {
+		t.Fatalf("detailed digest was not split: %d %v", len(cards), err)
+	}
+	for _, body := range cards {
+		if len(body) > MaxPayloadBytes || !strings.Contains(string(body), "解决建议") {
+			t.Fatal("detail lost or card too large")
+		}
+	}
+	n.Vulnerability.Details = &model.VulnerabilityDetails{}
+	body, err = Incremental("高风险", n, loc)
+	if err != nil || !strings.Contains(string(body), "来源未提供") {
+		t.Fatal("missing fields invented")
+	}
+}
