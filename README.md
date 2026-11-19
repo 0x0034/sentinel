@@ -14,7 +14,7 @@
    cp config.example.yaml config.yaml
    ```
 
-2. 只发送漏洞发现回调时，在 YAML 中填写 `discovery_webhook_url` 即可。需要飞书通知的订阅通过 `webhook_env` 指定保存机器人 URL 的环境变量名。含凭证的配置只保存在部署环境。
+2. 每个订阅都要通过 `webhook_env` 指定环境变量名，并在部署环境中将该变量设为完整的飞书机器人 URL。漏洞订阅还可以填写 `discovery_webhook_url` 启用发现回调。
 
 3. 验证配置并启动：
 
@@ -32,7 +32,7 @@
 
 ## 配置
 
-见 [config.example.yaml](config.example.yaml)。配置飞书目标时，`incremental` 和 `digest` 至少启用一个。仅使用漏洞回调时可以省略这两个开关和 `webhook_env`。
+见 [config.example.yaml](config.example.yaml)。每个订阅都必须配置 `webhook_env`，并在 `incremental` 和 `digest` 中至少启用一个。
 
 | 字段 | 说明 |
 | --- | --- |
@@ -76,7 +76,7 @@
 
 ## 漏洞发现回调
 
-在需要回调的漏洞订阅中填写 `discovery_webhook_url` 后重启。订阅建立基线后，每首次发现一个 AVD 即向该 URL 发送一条 JSON POST。省略 `webhook_env` 时只发送回调；同时配置飞书时，按各自开关发送飞书增量和汇总。
+在需要回调的漏洞订阅中填写 `discovery_webhook_url` 后重启。订阅建立基线后，每首次发现一个 AVD 即向该 URL 发送一条 JSON POST。飞书增量和汇总按各自开关发送。
 
 请求包含 `event_id`、`subscription_id`、`source`、`first_seen`（UTC）、`avd_id`、`title` 和原文 `url`。可选字段包括 `cve_id`、漏洞类型 `type`、`status`、`disclosure_date`、`cvss` 和 `details`。详情包含 `description`、`solution`、`affected_software` 和 `aliyun_score`。接收端按 `event_id` 去重，以任意 HTTP 2xx 确认，响应体可为空。
 

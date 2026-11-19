@@ -152,9 +152,6 @@ func Decode(r io.Reader, getenv func(string) string) (Config, error) {
 				return c, fmt.Errorf("subscription %s has an invalid discovery_webhook_url", s.ID)
 			}
 		}
-		if s.WebhookEnv == "" && s.DiscoveryWebhookURL != "" {
-			continue
-		}
 		if !envName.MatchString(s.WebhookEnv) {
 			return c, fmt.Errorf("subscription %s requires a webhook_env variable name", s.ID)
 		}

@@ -14,6 +14,21 @@ const valid = `subscriptions:
     digest: true
 `
 
+func TestAllSubscriptionsRequireFeishuWebhookEnv(t *testing.T) {
+	for _, kind := range []string{RSS, AliyunCVE, AliyunHighRisk} {
+		t.Run(kind, func(t *testing.T) {
+			body := strings.Replace(valid, "    webhook_env: BOT\n", "", 1)
+			if IsVulnerabilitySource(kind) {
+				body = strings.Replace(body, "url: https://example.com/feed", "type: "+kind+"\n    discovery_webhook_url: https://example.org/hook", 1)
+			}
+			_, err := Decode(strings.NewReader(body), func(string) string { return "" })
+			if err == nil || !strings.Contains(err.Error(), "webhook_env") {
+				t.Fatalf("expected missing webhook_env error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestConfiguration(t *testing.T) {
 	lookup := func(string) string { return "https://open.feishu.cn/open-apis/bot/v2/hook/test-placeholder" }
 	c, err := Decode(strings.NewReader(valid), lookup)

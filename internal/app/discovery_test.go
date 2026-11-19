@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,53 +15,6 @@ import (
 	"github.com/0x0034/sentinel/internal/model"
 	"github.com/0x0034/sentinel/internal/store"
 )
-
-func TestDiscoveryOnlySubscription(t *testing.T) {
-	var received atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-	for _, flags := range []string{"", "    incremental: true\n    digest: true\n"} {
-		c, err := config.Decode(strings.NewReader("subscriptions:\n  - id: sample\n    type: aliyun_high_risk\n    discovery_webhook_url: "+server.URL+"\n"+flags), func(string) string {
-			t.Fatal("callback-only subscription read a credential")
-			return ""
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		db, err := store.Open(filepath.Join(t.TempDir(), "discovery.db"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
-		feed, feishu := &fakeFeed{}, &captureSender{}
-		a := New(c, db, feed, feishu, quiet())
-		ctx := context.Background()
-		now := time.Date(2026, 11, 19, 10, 0, 0, 0, c.Location)
-		a.Now = func() time.Time { return now }
-		if err := a.Once(ctx, now); err != nil {
-			t.Fatal(err)
-		}
-		// Simulate a Feishu task left over from a previous configuration.
-		if err := db.EnqueueDigest(ctx, "sample", "2026-11-17", [][]byte{[]byte("old card")}, now); err != nil {
-			t.Fatal(err)
-		}
-		feed.result.Notices = []model.Notice{{ID: "AVD-1", Vulnerability: &model.Vulnerability{AVDID: "AVD-1"}}}
-		before := received.Load()
-		if err := a.Once(ctx, now); err != nil {
-			t.Fatal(err)
-		}
-		pending, err := db.Pending(ctx, now)
-		if err != nil || len(pending) != 1 || string(pending[0].Payload) != "old card" || pending[0].Attempts != 0 {
-			t.Fatal("unexpected Feishu queue state")
-		}
-		if received.Load() != before+1 || len(feishu.bodies) != 0 {
-			t.Fatal("expected only one discovery callback")
-		}
-	}
-}
 
 func TestDiscoveryWebhookPauseSwitchAndResumeAfterRestart(t *testing.T) {
 	type request struct{ path, body string }
