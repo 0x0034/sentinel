@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/0x0034/sentinel/internal/config"
 	"github.com/0x0034/sentinel/internal/model"
 	_ "modernc.org/sqlite"
 )
@@ -62,13 +63,13 @@ func (s *Store) migrate() error {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 2 {
+	if version > 3 {
 		return errors.New("database schema is newer than this application")
 	}
 	if _, err := s.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return err
 	}
-	if version == 2 {
+	if version == 3 {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -92,12 +93,20 @@ CREATE INDEX IF NOT EXISTS pending_deliveries ON deliveries(next_attempt,id) WHE
 			return err
 		}
 	}
-	if _, err := tx.Exec(`
+	if version < 2 {
+		if _, err := tx.Exec(`
 ALTER TABLE subscriptions ADD COLUMN source_type TEXT NOT NULL DEFAULT 'rss';
 ALTER TABLE notices ADD COLUMN baseline INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE notices ADD COLUMN vulnerability TEXT NOT NULL DEFAULT '';
 CREATE INDEX notices_discovered ON notices(subscription,first_seen) WHERE baseline=0;
 PRAGMA user_version=2;`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+ALTER TABLE deliveries ADD COLUMN target_key TEXT NOT NULL DEFAULT '';
+CREATE INDEX pending_target ON deliveries(target_key,subscription,next_attempt) WHERE sent_at IS NULL;
+PRAGMA user_version=3;`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -122,7 +131,8 @@ func (s *Store) EnsureSource(ctx context.Context, sub, kind string) error {
 
 func (s *Store) Close() error { return errors.Join(s.db.Close(), s.lock.Close()) }
 
-func (s *Store) Ingest(ctx context.Context, sub string, notices []model.Notice, payloads map[string][]byte, now time.Time) (int, error) {
+func (s *Store) Ingest(ctx context.Context, subscription config.Subscription, notices []model.Notice, payloads map[string][]byte, now time.Time) (int, error) {
+	sub := subscription.ID
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -158,8 +168,22 @@ ON CONFLICT(subscription,id) DO UPDATE SET title=excluded.title,link=excluded.li
 		if err != nil {
 			return 0, err
 		}
-		if !exists && initialized && len(payloads[n.ID]) > 0 {
+		if exists || !initialized {
+			continue
+		}
+		if len(payloads[n.ID]) > 0 {
 			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO deliveries(subscription,task_key,payload,next_attempt) VALUES(?,?,?,?)", sub, "incremental:"+sub+":"+n.ID, payloads[n.ID], now.Unix()); err != nil {
+				return 0, err
+			}
+			count++
+		}
+		if subscription.DiscoveryWebhookURL != "" && n.Vulnerability != nil {
+			event := newDiscoveryEvent(subscription, n, now)
+			payload, err := json.Marshal(event)
+			if err != nil {
+				return 0, err
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO deliveries(subscription,task_key,payload,next_attempt,target_key) VALUES(?,?,?,?,?)", sub, event.EventID, payload, now.Unix(), targetKey(subscription.DiscoveryWebhookURL)); err != nil {
 				return 0, err
 			}
 			count++
@@ -249,8 +273,16 @@ func (s *Store) EnqueueDigest(ctx context.Context, sub, date string, payloads []
 }
 
 func (s *Store) Pending(ctx context.Context, now time.Time, subscriptions ...string) ([]model.Delivery, error) {
-	query := "SELECT id,subscription,payload,attempts FROM deliveries WHERE sent_at IS NULL AND next_attempt<=?"
-	args := []any{now.Unix()}
+	return s.pending(ctx, now, "", subscriptions...)
+}
+
+func (s *Store) PendingDiscoveries(ctx context.Context, now time.Time, sub config.Subscription) ([]model.Delivery, error) {
+	return s.pending(ctx, now, targetKey(sub.DiscoveryWebhookURL), sub.ID)
+}
+
+func (s *Store) pending(ctx context.Context, now time.Time, target string, subscriptions ...string) ([]model.Delivery, error) {
+	query := "SELECT id,subscription,payload,attempts FROM deliveries WHERE sent_at IS NULL AND next_attempt<=? AND target_key=?"
+	args := []any{now.Unix(), target}
 	if len(subscriptions) > 0 {
 		query += " AND subscription IN (" + strings.TrimSuffix(strings.Repeat("?,", len(subscriptions)), ",") + ")"
 		for _, sub := range subscriptions {

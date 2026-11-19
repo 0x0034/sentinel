@@ -6,7 +6,7 @@
 
 ## 使用 Docker
 
-候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.4`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
+候选镜像：`registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel:0.2.0-rc.5`，平台为 `linux/amd64`。包含 Chromium 运行依赖；正式版本 `latest` 仍保持原版本。
 
 1. 复制示例，保留需要的订阅并编辑 RSS 地址（仅使用漏洞库时可删除 RSS 条目）：
 
@@ -14,7 +14,7 @@
    cp config.example.yaml config.yaml
    ```
 
-2. 通过现有凭证存储或终端环境设置 `FEISHU_WEBHOOK_URL`。配置文件只保存变量名，不保存 webhook 值；不要把真实值提交到 Git。
+2. 只发送漏洞发现回调时，在 YAML 中填写 `discovery_webhook_url` 即可。需要飞书通知的订阅通过 `webhook_env` 指定保存机器人 URL 的环境变量名。含凭证的配置只保存在部署环境。
 
 3. 验证配置并启动：
 
@@ -32,7 +32,7 @@
 
 ## 配置
 
-见 [config.example.yaml](config.example.yaml)。`incremental` 和 `digest` 必须显式设置，至少启用一个；配置字段拼错、缺失凭证或不合法时间会在启动时失败。
+见 [config.example.yaml](config.example.yaml)。配置飞书目标时，`incremental` 和 `digest` 至少启用一个。仅使用漏洞回调时可以省略这两个开关和 `webhook_env`。
 
 | 字段 | 说明 |
 | --- | --- |
@@ -48,6 +48,7 @@
 | `subscriptions[].url` | RSS/Atom URL；高风险来源固定为 `https://avd.aliyun.com/high-risk/list`，CVE 来源固定为 `https://avd.aliyun.com/nvd/list`，省略时按类型填充 |
 | `subscriptions[].pages` | 漏洞库来源默认前 5 页，范围 `1` 至 `20`；RSS 不支持此字段 |
 | `subscriptions[].webhook_env` | 飞书 webhook 对应的环境变量名 |
+| `subscriptions[].discovery_webhook_url` | 漏洞发现回调的完整 HTTP(S) URL，仅用于漏洞订阅。省略即关闭 |
 | `subscriptions[].incremental` | 是否为新公告产生增量任务 |
 | `subscriptions[].digest` | 是否产生昨日汇总任务 |
 
@@ -73,6 +74,14 @@
 - 只有 HTTP 成功且 JSON `code: 0` 才确认成功。响应丢失或发送成功后进程崩溃可能造成少量重复；不提供严格恰好一次保证。
 - 历史公告与任务首版不自动删除，需保留数据卷并按运行规模安排备份和磁盘监控。
 
+## 漏洞发现回调
+
+在需要回调的漏洞订阅中填写 `discovery_webhook_url` 后重启。订阅建立基线后，每首次发现一个 AVD 即向该 URL 发送一条 JSON POST。省略 `webhook_env` 时只发送回调；同时配置飞书时，按各自开关发送飞书增量和汇总。
+
+请求包含 `event_id`、`subscription_id`、`source`、`first_seen`（UTC）、`avd_id`、`title` 和原文 `url`。可选字段包括 `cve_id`、漏洞类型 `type`、`status`、`disclosure_date`、`cvss` 和 `details`。详情包含 `description`、`solution`、`affected_software` 和 `aliyun_score`。接收端按 `event_id` 去重，以任意 HTTP 2xx 确认，响应体可为空。
+
+请求超时为 15 秒。网络错误和非 2xx 响应（含重定向）按原请求体退避重试，重启后继续。移除 URL 会暂停该目标的积压任务，关闭期间发现的条目只按飞书设置投递。换址后，新地址仅接收新发现，恢复原 URL 后继续投递原积压。
+
 ## 漏洞库来源范围
 
 默认完整扫描前 5 页，当前每页 30 条，约覆盖 150 条。任一页面失败、挑战页、页码错位、整页重复或同一 AVD 内容冲突都会使本轮采集失败，下一轮重新扫描；只有完整成功才保存条目及发送任务。高风险列表实测存在相邻页的相同条目重复，按 AVD 去重后保存一次；原 CVE 列表继续严格拒绝跨页重叠。不会在遇到已见条目或旧披露日期时提前停止，也不保证全库覆盖、旧条目持续更新或任意停机时长后的补齐。修改页数会改变监测窗口，新进入窗口的旧条目也会被视为首次发现。
@@ -93,7 +102,7 @@
 
 ```sh
 sentinel run -config config.yaml       # 常驻服务（默认命令）
-sentinel once -config config.yaml      # 抓取、生成到期汇总并处理本轮最多 100 个到期任务
+sentinel once -config config.yaml      # 抓取、生成到期汇总，处理到期飞书任务及各订阅的回调任务
 sentinel check -config config.yaml     # 本地配置与凭证格式检查，不发送消息
 sentinel send-test -config config.yaml # 每个配置订阅发送两张明确标识的测试卡片
 sentinel version                      # 应用版本、Go 编译版本和目标平台
@@ -109,7 +118,7 @@ bin/sentinel version
 make image
 ```
 
-Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.4`），候选版本不更新 `latest`。
+Makefile 固定 `GOTOOLCHAIN=go1.27.2`。Docker 构建使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27` 并固定 digest；该标签当前内置 Go 1.27.3，因此构建阶段显式下载、使用和校验 Go 1.27.2 工具链。纯 Go SQLite 驱动支持 `CGO_ENABLED=0` 的 amd64 构建。`make image` 构建并加载镜像；`make push` 只推送 `VERSION` 对应标签（默认 `0.2.0-rc.5`），候选版本不更新 `latest`。
 
 运行基础镜像使用 `registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22` 并固定 digest。APK 软件源使用 `https://mirrors.aliyun.com/alpine/`，安装 Chromium 和 TLS 证书前完成替换。`APK_DOWNLOAD_BASE` 构建参数默认也是该源，可在构建机器上指向同源缓存转发以改善下载速度；不改变最终镜像的 APK 源或运行环境。Alpine 包签名验证始终启用。
 

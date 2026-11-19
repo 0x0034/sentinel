@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x0034/sentinel/internal/config"
 	"github.com/0x0034/sentinel/internal/model"
 )
 
@@ -24,12 +25,12 @@ func TestDurableQueueAndSubscriptionIsolation(t *testing.T) {
 	old := model.Notice{ID: "old", Title: "old", PublishedAt: &now}
 	fresh := model.Notice{ID: "new", Title: "new", PublishedAt: &now}
 	for _, sub := range []string{"a", "b"} {
-		if n, err := s.Ingest(ctx, sub, []model.Notice{old}, map[string][]byte{"old": []byte("old")}, now); err != nil || n != 0 {
+		if n, err := s.Ingest(ctx, config.Subscription{ID: sub}, []model.Notice{old}, map[string][]byte{"old": []byte("old")}, now); err != nil || n != 0 {
 			t.Fatalf("baseline: %d %v", n, err)
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := s.Ingest(ctx, "a", []model.Notice{old, fresh}, map[string][]byte{"new": []byte("frozen")}, now); err != nil {
+		if _, err := s.Ingest(ctx, config.Subscription{ID: "a"}, []model.Notice{old, fresh}, map[string][]byte{"new": []byte("frozen")}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,7 +63,7 @@ func TestDurableQueueAndSubscriptionIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh.Title = "changed"
-	if _, err := s.Ingest(ctx, "a", []model.Notice{fresh}, map[string][]byte{"new": []byte("changed")}, now); err != nil {
+	if _, err := s.Ingest(ctx, config.Subscription{ID: "a"}, []model.Notice{fresh}, map[string][]byte{"new": []byte("changed")}, now); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := s.Pending(ctx, now.Add(time.Hour)); len(p) != 0 {

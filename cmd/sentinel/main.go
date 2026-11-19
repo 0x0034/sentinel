@@ -64,6 +64,10 @@ func run(log *slog.Logger) error {
 	sender := notify.NewClient()
 	if command == "send-test" {
 		for _, sub := range cfg.Subscriptions {
+			if sub.Webhook == "" {
+				log.Info("skipping Feishu test: no bot configured", "subscription", sub.ID)
+				continue
+			}
 			now := time.Now()
 			notices := app.TestNotices(now, cfg.Location)
 			digest := notify.Digest

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/0x0034/sentinel/internal/config"
@@ -30,17 +31,18 @@ func transientFetch(err error) bool {
 }
 
 type App struct {
-	Config  config.Config
-	Store   *store.Store
-	Fetcher Fetcher
-	Sender  Sender
-	Log     *slog.Logger
-	Now     func() time.Time
-	failed  map[string]bool
+	Config    config.Config
+	Store     *store.Store
+	Fetcher   Fetcher
+	Sender    Sender
+	discovery *notify.DiscoveryClient
+	Log       *slog.Logger
+	Now       func() time.Time
+	failed    map[string]bool
 }
 
 func New(c config.Config, s *store.Store, f Fetcher, n Sender, log *slog.Logger) *App {
-	return &App{Config: c, Store: s, Fetcher: f, Sender: n, Log: log, failed: map[string]bool{}}
+	return &App{Config: c, Store: s, Fetcher: f, Sender: n, discovery: notify.NewDiscoveryClient(), Log: log, failed: map[string]bool{}}
 }
 
 func (a *App) validateSources(ctx context.Context) error {
@@ -77,7 +79,7 @@ func (a *App) Poll(ctx context.Context, now time.Time) error {
 			result.Notices[i].FirstSeen = completed
 		}
 		payloads := map[string][]byte{}
-		if sub.Incremental {
+		if sub.Webhook != "" && sub.Incremental {
 			for _, notice := range result.Notices {
 				payload, err := notify.Incremental(sub.Name, notice, a.Config.Location)
 				if err != nil {
@@ -86,7 +88,7 @@ func (a *App) Poll(ctx context.Context, now time.Time) error {
 				payloads[notice.ID] = payload
 			}
 		}
-		count, err := a.Store.Ingest(ctx, sub.ID, result.Notices, payloads, completed)
+		count, err := a.Store.Ingest(ctx, sub, result.Notices, payloads, completed)
 		if err != nil {
 			return err
 		}
@@ -109,7 +111,7 @@ func (a *App) Digests(ctx context.Context, now time.Time) error {
 	start := today.AddDate(0, 0, -1)
 	date := start.Format("2006-01-02")
 	for _, sub := range a.Config.Subscriptions {
-		if !sub.Digest {
+		if sub.Webhook == "" || !sub.Digest {
 			continue
 		}
 		exists, err := a.Store.DigestExists(ctx, sub.ID, date)
@@ -145,37 +147,76 @@ func (a *App) Digests(ctx context.Context, now time.Time) error {
 }
 
 func (a *App) Drain(ctx context.Context, now time.Time) error {
+	if err := a.drainFeishu(ctx, now); err != nil {
+		return err
+	}
+	return a.drainDiscoveries(ctx, now)
+}
+
+func (a *App) drainFeishu(ctx context.Context, now time.Time) error {
 	started := time.Now()
 	subs := map[string]config.Subscription{}
 	ids := []string{}
 	for _, sub := range a.Config.Subscriptions {
+		if sub.Webhook == "" {
+			continue
+		}
 		subs[sub.ID] = sub
 		ids = append(ids, sub.ID)
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	pending, err := a.Store.Pending(ctx, now, ids...)
 	if err != nil {
 		return err
 	}
 	for _, d := range pending {
-		if err := ctx.Err(); err != nil {
+		if err := a.deliver(ctx, d, a.Sender, subs[d.Subscription].Webhook, now.Add(time.Since(started))); err != nil {
 			return err
 		}
-		sub := subs[d.Subscription]
-		if err := a.Sender.Send(ctx, sub.Webhook, d.Payload); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if retryErr := a.Store.Retry(ctx, d, now.Add(time.Since(started)), err.Error()); retryErr != nil {
-				return retryErr
-			}
-			a.Log.Warn("notification scheduled for retry", "subscription", sub.ID, "delivery", d.ID, "error", err)
+	}
+	return nil
+}
+
+func (a *App) drainDiscoveries(ctx context.Context, now time.Time) error {
+	started := time.Now()
+	for _, sub := range a.Config.Subscriptions {
+		if sub.DiscoveryWebhookURL == "" {
 			continue
 		}
-		if err := a.Store.Sent(ctx, d.ID, now.Add(time.Since(started))); err != nil {
+		pending, err := a.Store.PendingDiscoveries(ctx, now, sub)
+		if err != nil {
 			return err
 		}
-		a.Log.Info("notification sent", "subscription", sub.ID, "delivery", d.ID)
+		for _, d := range pending {
+			if err := a.deliver(ctx, d, a.discovery, sub.DiscoveryWebhookURL, now.Add(time.Since(started))); err != nil {
+				return err
+			}
+		}
 	}
+	return nil
+}
+
+func (a *App) deliver(ctx context.Context, d model.Delivery, sender Sender, target string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	started := time.Now()
+	if err := sender.Send(ctx, target, d.Payload); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if retryErr := a.Store.Retry(ctx, d, now.Add(time.Since(started)), err.Error()); retryErr != nil {
+			return retryErr
+		}
+		a.Log.Warn("notification scheduled for retry", "subscription", d.Subscription, "delivery", d.ID, "error", err)
+		return nil
+	}
+	if err := a.Store.Sent(ctx, d.ID, now.Add(time.Since(started))); err != nil {
+		return err
+	}
+	a.Log.Info("notification sent", "subscription", d.Subscription, "delivery", d.ID)
 	return nil
 }
 
@@ -201,27 +242,35 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	workerDone := make(chan error, 1)
-	workerStopped := make(chan struct{})
-	go func() {
-		defer close(workerStopped)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				if err := a.Drain(ctx, now); err != nil {
-					if ctx.Err() == nil {
-						workerDone <- err
-					}
+	workerDone := make(chan error, 2)
+	var workers sync.WaitGroup
+	startWorker := func(drain func(context.Context, time.Time) error) {
+		workers.Go(func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
 					return
+				case now := <-ticker.C:
+					if err := drain(ctx, now); err != nil {
+						if ctx.Err() == nil {
+							workerDone <- err
+						}
+						return
+					}
 				}
 			}
+		})
+	}
+	startWorker(a.drainFeishu)
+	for _, sub := range a.Config.Subscriptions {
+		if sub.DiscoveryWebhookURL != "" {
+			startWorker(a.drainDiscoveries)
+			break
 		}
-	}()
-	defer func() { cancel(); <-workerStopped }()
+	}
+	defer func() { cancel(); workers.Wait() }()
 	if err := a.Poll(ctx, time.Now()); err != nil {
 		if ctx.Err() != nil {
 			return nil

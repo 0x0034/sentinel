@@ -23,7 +23,7 @@ Use a single-context layout: root `GLOSSARY.md` and `docs/adr/`. See `docs/agent
 - Browser subprocesses must use isolated temporary profiles and a minimal environment without webhook credentials. Validate business DOM and pagination, not only process exit or HTTP status.
 - Run `make check test build` after behavior changes. Tests use local HTTP servers and temporary SQLite databases; they do not send real robot messages.
 - SQLite is the durable store. Run one service instance per database; container data lives in `/data` and must be persisted.
-- Keep webhook values in environment variables. Config files contain environment variable names only; do not log webhook URLs or commit credentials.
+- Keep Feishu webhook values in environment variables. Vulnerability subscriptions optionally specify the discovery webhook URL directly in YAML. Do not log webhook URLs or commit credentials.
 - Build Docker images for `linux/amd64`. The build base is `registry.cn-hangzhou.aliyuncs.com/0x0034/golang:1.27`; the compiler remains Go 1.27.2 even if the base contains a different patch version.
 - The runtime base is `registry.cn-hangzhou.aliyuncs.com/0x0034/alpine:3.22`; use `https://mirrors.aliyun.com/alpine/` for its APK repositories.
 - `make image` builds the image; `make push` publishes to `registry.cn-hangzhou.aliyuncs.com/0x0034/sentinel`. Publishing and `send-test` require authorization for the specific task.

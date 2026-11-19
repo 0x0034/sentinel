@@ -15,15 +15,16 @@ import (
 )
 
 type Subscription struct {
-	Type        string `yaml:"type"`
-	Pages       int    `yaml:"pages"`
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	URL         string `yaml:"url"`
-	WebhookEnv  string `yaml:"webhook_env"`
-	Incremental bool   `yaml:"incremental"`
-	Digest      bool   `yaml:"digest"`
-	Webhook     string `yaml:"-"`
+	Type                string `yaml:"type"`
+	Pages               int    `yaml:"pages"`
+	ID                  string `yaml:"id"`
+	Name                string `yaml:"name"`
+	URL                 string `yaml:"url"`
+	WebhookEnv          string `yaml:"webhook_env"`
+	DiscoveryWebhookURL string `yaml:"discovery_webhook_url"`
+	Incremental         bool   `yaml:"incremental"`
+	Digest              bool   `yaml:"digest"`
+	Webhook             string `yaml:"-"`
 }
 
 const RSS = "rss"
@@ -142,11 +143,23 @@ func Decode(r io.Reader, getenv func(string) string) (Config, error) {
 		if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.Fragment != "" {
 			return c, fmt.Errorf("subscription %s has an invalid source URL", s.ID)
 		}
-		if !s.Incremental && !s.Digest {
-			return c, fmt.Errorf("subscription %s must enable incremental or digest", s.ID)
+		if s.DiscoveryWebhookURL != "" {
+			if !IsVulnerabilitySource(s.Type) {
+				return c, fmt.Errorf("subscription %s: discovery_webhook_url requires a vulnerability source", s.ID)
+			}
+			target, err := url.Parse(s.DiscoveryWebhookURL)
+			if err != nil || target.Hostname() == "" || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil || target.Fragment != "" {
+				return c, fmt.Errorf("subscription %s has an invalid discovery_webhook_url", s.ID)
+			}
+		}
+		if s.WebhookEnv == "" && s.DiscoveryWebhookURL != "" {
+			continue
 		}
 		if !envName.MatchString(s.WebhookEnv) {
 			return c, fmt.Errorf("subscription %s requires a webhook_env variable name", s.ID)
+		}
+		if !s.Incremental && !s.Digest {
+			return c, fmt.Errorf("subscription %s must enable incremental or digest for Feishu", s.ID)
 		}
 		s.Webhook = getenv(s.WebhookEnv)
 		if !ValidWebhook(s.Webhook) {

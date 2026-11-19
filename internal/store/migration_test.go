@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x0034/sentinel/internal/config"
 	"github.com/0x0034/sentinel/internal/model"
 )
 
@@ -55,11 +56,11 @@ PRAGMA user_version=1;`)
 	if err := db.EnsureSource(ctx, "rss", "aliyun_cve"); err == nil {
 		t.Fatal("source type change reused old state")
 	}
-	if queued, err := db.Ingest(ctx, "rss", items, map[string][]byte{"old": []byte("should-not-send")}, now); err != nil || queued != 0 {
+	if queued, err := db.Ingest(ctx, config.Subscription{ID: "rss"}, items, map[string][]byte{"old": []byte("should-not-send")}, now); err != nil || queued != 0 {
 		t.Fatal("existing baseline was reset")
 	}
 	var version int
-	if err := db.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+	if err := db.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatal("schema migration not completed")
 	}
 }
@@ -88,7 +89,7 @@ func TestDiscoveryWindowExcludesBaselineAndSurvivesReopen(t *testing.T) {
 		{makeNotice("last-second"), end.Add(-time.Second)},
 		{makeNotice("excluded-end"), end},
 	} {
-		if _, err := db.Ingest(ctx, "cve", []model.Notice{sample.n}, nil, sample.at); err != nil {
+		if _, err := db.Ingest(ctx, config.Subscription{ID: "cve"}, []model.Notice{sample.n}, nil, sample.at); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -105,7 +106,7 @@ func TestDiscoveryWindowExcludesBaselineAndSurvivesReopen(t *testing.T) {
 	score := 9.8
 	edited.Vulnerability.CVSS = &score
 	edited.Vulnerability.Status = "CVE 武器化"
-	if _, err := db.Ingest(ctx, "cve", []model.Notice{edited}, nil, end.Add(time.Hour)); err != nil {
+	if _, err := db.Ingest(ctx, config.Subscription{ID: "cve"}, []model.Notice{edited}, nil, end.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	items, err := db.DiscoveredBetween(ctx, "cve", start, end)

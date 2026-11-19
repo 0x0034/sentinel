@@ -17,6 +17,7 @@ subscriptions:
     type: aliyun_high_risk
     url: https://avd.aliyun.com/high-risk/list
     pages: 5
+    # discovery_webhook_url: https://receiver.example.org/vulnerability
     webhook_env: FEISHU_WEBHOOK_URL
     incremental: true
     digest: true

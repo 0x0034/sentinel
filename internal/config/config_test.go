@@ -24,14 +24,15 @@ func TestConfiguration(t *testing.T) {
 		t.Fatalf("wrong defaults: %+v", c)
 	}
 	for name, body := range map[string]string{
-		"unknown":   "unexpected: secret-value\n" + valid,
-		"interval":  "poll_interval: 0s\n" + valid,
-		"timezone":  "timezone: impossible\n" + valid,
-		"time":      "digest_time: 25:00\n" + valid,
-		"scheme":    strings.Replace(valid, "https://example.com/feed", "file:///secret-value", 1),
-		"modes":     strings.ReplaceAll(valid, ": true", ": false"),
-		"documents": valid + "---\n" + valid,
-		"duplicate": valid + strings.TrimPrefix(valid, "subscriptions:\n"),
+		"unknown":               "unexpected: secret-value\n" + valid,
+		"rss discovery webhook": valid + "    discovery_webhook_url: https://example.org/secret-value\n",
+		"interval":              "poll_interval: 0s\n" + valid,
+		"timezone":              "timezone: impossible\n" + valid,
+		"time":                  "digest_time: 25:00\n" + valid,
+		"scheme":                strings.Replace(valid, "https://example.com/feed", "file:///secret-value", 1),
+		"modes":                 strings.ReplaceAll(valid, ": true", ": false"),
+		"documents":             valid + "---\n" + valid,
+		"duplicate":             valid + strings.TrimPrefix(valid, "subscriptions:\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Decode(strings.NewReader(body), lookup)
@@ -56,6 +57,11 @@ func TestSourceConfigurationAndLegacyDefaults(t *testing.T) {
 		t.Fatal("legacy RSS configuration changed")
 	}
 	cve := strings.Replace(valid, "url: https://example.com/feed", "type: aliyun_cve", 1)
+	target := "https://example.org/hook?token=placeholder"
+	withWebhook, err := Decode(strings.NewReader(cve+"    discovery_webhook_url: "+target+"\n"), lookup)
+	if err != nil || withWebhook.Subscriptions[0].DiscoveryWebhookURL != target {
+		t.Fatal("configured discovery URL was not preserved")
+	}
 	c, err := Decode(strings.NewReader(cve), lookup)
 	if err != nil || c.Subscriptions[0].URL != AliyunCVEURL || c.Subscriptions[0].Pages != 5 || c.Browser.PageTimeout != 45*time.Second {
 		t.Fatalf("CVE defaults: %+v %v", c, err)
@@ -68,6 +74,7 @@ func TestSourceConfigurationAndLegacyDefaults(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
+		cve + "    discovery_webhook_url: file:///invalid\n",
 		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    url: https://avd.aliyun.com/nvd/list", 1),
 		strings.Replace(highRisk, "type: aliyun_high_risk", "type: aliyun_high_risk\n    pages: 21", 1),
 		strings.Replace(cve, "type: aliyun_cve", "type: aliyun_cve\n    url: https://avd.aliyun.com/high-risk/list", 1),
